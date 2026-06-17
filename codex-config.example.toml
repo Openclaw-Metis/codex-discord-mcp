@@ -1,0 +1,5 @@
+[mcp_servers.discord]
+command = "node"
+args = ["C:\\path\\to\\codex-discord-mcp\\dist\\cli.js", "mcp"]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
