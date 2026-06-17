@@ -1,5 +1,6 @@
 import { CodexRunner, codexOptionsFromEnv } from './codex.js'
 import { DiscordBridge } from './discord.js'
+import { warnUnsafeBotMode } from './safety.js'
 import { installShutdownHandlers } from './shutdown.js'
 import {
   getStatePaths,
@@ -21,7 +22,9 @@ export async function runRelay(): Promise<void> {
   }
 
   const bridge = new DiscordBridge(token, paths)
-  const runner = new CodexRunner(codexOptionsFromEnv(), paths)
+  const codexOptions = codexOptionsFromEnv()
+  warnUnsafeBotMode(codexOptions)
+  const runner = new CodexRunner(codexOptions, paths)
   const chains = new Map<string, Promise<void>>()
 
   function enqueue(message: QueuedMessage): void {
