@@ -20,6 +20,22 @@ export type CodexRunResult = {
   threadId?: string
 }
 
+// Environment variables that belong to the Discord bridge and must never be
+// exposed to the Codex subprocess. Discord content is untrusted and is fed into
+// the Codex prompt, so a prompt-injected run must not be able to surface these.
+// Codex's own credentials (OPENAI_API_KEY, CODEX_*, PATH, etc.) are preserved.
+const BRIDGE_SECRET_ENV_KEYS = ['DISCORD_BOT_TOKEN']
+
+export function buildCodexChildEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...env }
+  for (const key of BRIDGE_SECRET_ENV_KEYS) {
+    delete childEnv[key]
+  }
+  return childEnv
+}
+
 export function codexOptionsFromEnv(): CodexRunnerOptions {
   return {
     command: process.env.CODEX_COMMAND || 'codex',
@@ -119,7 +135,7 @@ async function runCodexProcess(
   return await new Promise<CodexRunResult>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: buildCodexChildEnv(),
       windowsHide: true,
     })
 

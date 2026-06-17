@@ -25,7 +25,7 @@ import {
   pruneExpiredPending,
   saveAccess,
 } from './state.js'
-import type { AttachmentMeta, QueuedMessage, StatePaths } from './types.js'
+import type { Access, AttachmentMeta, QueuedMessage, StatePaths } from './types.js'
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
@@ -225,9 +225,9 @@ export class DiscordBridge extends EventEmitter {
     const isDm = message.channel.type === ChannelType.DM
 
     if (isDm) {
-      if (access.dmPolicy === 'disabled') return { action: 'drop' }
-      if (access.allowUsers.includes(senderId)) return { action: 'deliver', access }
-      if (access.dmPolicy === 'allowlist') return { action: 'drop' }
+      const decision = evaluateDmPolicy(access, senderId)
+      if (decision === 'drop') return { action: 'drop' }
+      if (decision === 'deliver') return { action: 'deliver', access }
 
       for (const [code, pending] of Object.entries(access.pending)) {
         if (pending.senderId !== senderId) continue
@@ -254,12 +254,11 @@ export class DiscordBridge extends EventEmitter {
     }
 
     const channelId = this.policyChannelId(message)
-    const policy = access.channels[channelId]
-    if (!policy) return { action: 'drop' }
-    if (policy.allowUsers.length > 0 && !policy.allowUsers.includes(senderId)) {
+    if (channelGateDecision(access, channelId, senderId) === 'drop') {
       return { action: 'drop' }
     }
-    if (policy.requireMention && !(await this.isMentioned(message, access.mentionPatterns))) {
+    const policy = access.channels[channelId]
+    if (policy?.requireMention && !(await this.isMentioned(message, access.mentionPatterns))) {
       return { action: 'drop' }
     }
 
@@ -335,10 +334,14 @@ export class DiscordBridge extends EventEmitter {
 
     if (channel.type === ChannelType.DM) {
       const userId = channel.recipientId ?? channel.recipient?.id ?? this.dmChannelUsers.get(id)
-      if (userId && access.allowUsers.includes(userId)) return { channel, access }
+      if (channelSendAllowed(access, { isDm: true, recipientUserId: userId })) {
+        return { channel, access }
+      }
     } else {
       const channelId = channel.isThread() ? channel.parentId ?? channel.id : channel.id
-      if (access.channels[channelId]) return { channel, access }
+      if (channelSendAllowed(access, { isDm: false, channelId })) {
+        return { channel, access }
+      }
     }
 
     throw new Error(`channel ${id} is not allowlisted`)
@@ -489,7 +492,7 @@ function safeExtension(name: string): string {
   return raw.replace(/[^A-Za-z0-9]/g, '') || 'bin'
 }
 
-function isPathInsideOrEqual(path: string, root: string): boolean {
+export function isPathInsideOrEqual(path: string, root: string): boolean {
   const normalizedPath = normalizeForCompare(path)
   const normalizedRoot = normalizeForCompare(root)
   return (
@@ -513,4 +516,48 @@ export function isSafeMentionPattern(pattern: string): boolean {
     new RegExp(String.raw`\([^)]*\.[*+][^)]*\)\s*${quantifiedGroup}`),
   ]
   return !unsafePatterns.some(unsafe => unsafe.test(pattern))
+}
+
+// Pure DM access decision. No side effects and no pairing-code issuance.
+// 'deliver': sender is allowlisted. 'drop': rejected. 'pairing': unknown sender
+// under the pairing policy — the caller is responsible for issuing/refreshing a
+// pairing code. dmPolicy=disabled intentionally drops all DMs.
+export function evaluateDmPolicy(
+  access: Pick<Access, 'dmPolicy' | 'allowUsers'>,
+  senderId: string,
+): 'drop' | 'deliver' | 'pairing' {
+  if (access.dmPolicy === 'disabled') return 'drop'
+  if (access.allowUsers.includes(senderId)) return 'deliver'
+  if (access.dmPolicy === 'allowlist') return 'drop'
+  return 'pairing'
+}
+
+// Pure inbound guild-channel access decision. 'pass' means the channel allowlist
+// and any per-channel user allowlist were satisfied; the caller still applies the
+// mention requirement separately. 'drop' rejects before any mention check runs.
+export function channelGateDecision(
+  access: Pick<Access, 'channels'>,
+  channelId: string,
+  senderId: string,
+): 'drop' | 'pass' {
+  const policy = access.channels[channelId]
+  if (!policy) return 'drop'
+  if (policy.allowUsers.length > 0 && !policy.allowUsers.includes(senderId)) return 'drop'
+  return 'pass'
+}
+
+// Pure MCP write-path allowlist check, mirroring fetchAllowedChannelWithAccess.
+// This is the boundary that stops Codex from sending to non-allowlisted channels.
+export function channelSendAllowed(
+  access: Pick<Access, 'allowUsers' | 'channels'>,
+  descriptor:
+    | { isDm: true; recipientUserId: string | undefined }
+    | { isDm: false; channelId: string },
+): boolean {
+  if (descriptor.isDm) {
+    return Boolean(
+      descriptor.recipientUserId && access.allowUsers.includes(descriptor.recipientUserId),
+    )
+  }
+  return Boolean(access.channels[descriptor.channelId])
 }
