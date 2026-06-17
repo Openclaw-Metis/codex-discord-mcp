@@ -19,6 +19,7 @@ export function getStatePaths(stateDir = defaultStateDir()): StatePaths {
     envFile: join(stateDir, '.env'),
     accessFile: join(stateDir, 'access.json'),
     approvedDir: join(stateDir, 'approved'),
+    botPidFile: join(stateDir, 'bot.pid'),
     inboxDir: join(stateDir, 'inbox'),
     queueFile: join(stateDir, 'queue.json'),
     threadsFile: join(stateDir, 'threads.json'),
@@ -209,6 +210,39 @@ export function clearStateFile(path: string): void {
   if (existsSync(path)) rmSync(path, { force: true })
 }
 
+export type ProcessLock = {
+  path: string
+  pid: number
+  release: () => void
+}
+
+export function acquireProcessLock(
+  path: string,
+  label: string,
+  pid = process.pid,
+): ProcessLock {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      writeFileSync(path, `${pid}\n`, { flag: 'wx', mode: 0o600 })
+      return buildProcessLock(path, pid)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST') throw err
+
+      const owner = readPidFile(path)
+      if (owner && isProcessAlive(owner)) {
+        throw new Error(`${label} is already running with pid ${owner}`)
+      }
+
+      rmSync(path, { force: true })
+    }
+  }
+
+  throw new Error(`${label} lock could not be acquired at ${path}`)
+}
+
 function readJson<T>(path: string, fallback: T): T
 function readJson<T>(path: string, fallback: T | undefined): T | undefined
 function readJson<T>(path: string, fallback: T | undefined): T | undefined {
@@ -274,6 +308,44 @@ function readFileWithRetry(path: string): string {
     }
   }
   throw lastError
+}
+
+function buildProcessLock(path: string, pid: number): ProcessLock {
+  let released = false
+  return {
+    path,
+    pid,
+    release: () => {
+      if (released) return
+      released = true
+      try {
+        if (readPidFile(path) === pid) rmSync(path, { force: true })
+      } catch {}
+    },
+  }
+}
+
+function readPidFile(path: string): number | undefined {
+  let raw = ''
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+
+  const match = /^\s*(\d+)\s*$/.exec(raw)
+  if (!match) return undefined
+  const pid = Number.parseInt(match[1], 10)
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 async function delayMs(ms: number): Promise<void> {
