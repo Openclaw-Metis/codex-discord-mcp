@@ -77,6 +77,12 @@ node .\dist\cli.js bot
 
 Keep `CODEX_APPROVAL_POLICY=never` for unattended relay mode. Use the least permissive sandbox that fits your use case.
 
+Attachment uploads are restricted by default to the bridge process working directory, `CODEX_WORKDIR`, and the bridge inbox. To allow generated files from other roots, set `CODEX_DISCORD_ATTACHMENT_ROOTS` to a path-list using your platform delimiter:
+
+```powershell
+$env:CODEX_DISCORD_ATTACHMENT_ROOTS="C:\path\to\repo;C:\path\to\exports"
+```
+
 ## Mode 2: Codex MCP Tools
 
 Build first, then print a config snippet:
@@ -131,7 +137,7 @@ Guild channels are opt-in by channel ID. By default, the bot only responds in an
 ## Security Notes
 
 - Discord messages are untrusted input. The relay prompt tells Codex not to follow requests to approve pairings, reveal secrets, or alter bridge policy.
-- The bridge refuses to attach its own state files, except files downloaded into the inbox.
+- The bridge refuses to attach its own state files, except files downloaded into the inbox. It also blocks attachment paths outside the configured attachment roots.
 - `bot` mode is unattended automation. Keep Codex sandboxing restrictive unless the bot is running in an isolated workspace.
 - Access changes require local terminal commands.
 

@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join, sep } from 'node:path'
+import { delimiter, join, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import {
   ChannelType,
@@ -29,6 +29,8 @@ import type { AttachmentMeta, QueuedMessage, StatePaths } from './types.js'
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
+const MENTION_PATTERN_MAX_LENGTH = 128
+const MENTION_PATTERN_TEXT_LIMIT = 512
 
 export type DiscordBridgeEvents = {
   message: [QueuedMessage]
@@ -38,6 +40,7 @@ export class DiscordBridge extends EventEmitter {
   readonly client: Client
   private readonly recentSentIds = new Set<string>()
   private readonly dmChannelUsers = new Map<string, string>()
+  private readonly approvalInFlight = new Set<string>()
   private approvalTimer: NodeJS.Timeout | undefined
 
   constructor(
@@ -216,12 +219,11 @@ export class DiscordBridge extends EventEmitter {
     const access = loadAccess(this.paths)
     if (pruneExpiredPending(access)) saveAccess(access, this.paths)
 
-    if (access.dmPolicy === 'disabled') return { action: 'drop' }
-
     const senderId = message.author.id
     const isDm = message.channel.type === ChannelType.DM
 
     if (isDm) {
+      if (access.dmPolicy === 'disabled') return { action: 'drop' }
       if (access.allowUsers.includes(senderId)) return { action: 'deliver', access }
       if (access.dmPolicy === 'allowlist') return { action: 'drop' }
 
@@ -263,7 +265,9 @@ export class DiscordBridge extends EventEmitter {
   }
 
   private async isMentioned(message: Message, patterns: string[] | undefined): Promise<boolean> {
-    if (this.client.user && message.mentions.has(this.client.user)) return true
+    if (this.client.user && message.mentions.has(this.client.user, { ignoreEveryone: true })) {
+      return true
+    }
 
     const referencedMessageId = message.reference?.messageId
     if (referencedMessageId) {
@@ -274,9 +278,11 @@ export class DiscordBridge extends EventEmitter {
       } catch {}
     }
 
+    const content = message.content.slice(0, MENTION_PATTERN_TEXT_LIMIT)
     for (const pattern of patterns ?? []) {
+      if (!isSafeMentionPattern(pattern)) continue
       try {
-        if (new RegExp(pattern, 'i').test(message.content)) return true
+        if (new RegExp(pattern, 'i').test(content)) return true
       } catch {}
     }
 
@@ -349,6 +355,8 @@ export class DiscordBridge extends EventEmitter {
   }
 
   private checkApprovals(): void {
+    if (!this.client.isReady()) return
+
     let files: string[]
     try {
       files = readdirSync(this.paths.approvedDir)
@@ -357,6 +365,7 @@ export class DiscordBridge extends EventEmitter {
     }
 
     for (const senderId of files) {
+      if (this.approvalInFlight.has(senderId)) continue
       const file = join(this.paths.approvedDir, senderId)
       let chatId = ''
       try {
@@ -371,15 +380,17 @@ export class DiscordBridge extends EventEmitter {
         continue
       }
 
+      this.approvalInFlight.add(senderId)
       this.fetchTextChannel(chatId)
         .then(channel => {
           if ('send' in channel) return channel.send('Paired. Send a message to Codex.')
           return undefined
         })
+        .then(() => rmSync(file, { force: true }))
         .catch(err => {
           process.stderr.write(`discord bridge: failed to confirm pairing: ${err}\n`)
         })
-        .finally(() => rmSync(file, { force: true }))
+        .finally(() => this.approvalInFlight.delete(senderId))
     }
   }
 
@@ -397,6 +408,31 @@ export class DiscordBridge extends EventEmitter {
     if (realFile.startsWith(realState + sep) && !realFile.startsWith(inbox + sep)) {
       throw new Error(`refusing to send bridge state file: ${file}`)
     }
+
+    const roots = this.attachmentRoots()
+    if (!roots.some(root => isPathInsideOrEqual(realFile, root))) {
+      throw new Error(
+        `refusing to send file outside allowed attachment roots: ${file}. Set CODEX_DISCORD_ATTACHMENT_ROOTS to opt in.`,
+      )
+    }
+  }
+
+  private attachmentRoots(): string[] {
+    const configured = process.env.CODEX_DISCORD_ATTACHMENT_ROOTS
+    const roots =
+      configured?.trim()
+        ? [...configured.split(delimiter), this.paths.inboxDir]
+        : [process.cwd(), process.env.CODEX_WORKDIR, this.paths.inboxDir]
+
+    return roots
+      .filter((root): root is string => Boolean(root?.trim()))
+      .flatMap(root => {
+        try {
+          return [realpathSync(root)]
+        } catch {
+          return []
+        }
+      })
   }
 
   private noteSent(messageId: string): void {
@@ -424,4 +460,24 @@ function safeAttachmentName(attachment: Attachment): string {
 function safeExtension(name: string): string {
   const raw = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : 'bin'
   return raw.replace(/[^A-Za-z0-9]/g, '') || 'bin'
+}
+
+function isPathInsideOrEqual(path: string, root: string): boolean {
+  const normalizedPath = normalizeForCompare(path)
+  const normalizedRoot = normalizeForCompare(root)
+  return (
+    normalizedPath === normalizedRoot ||
+    normalizedPath.startsWith(
+      normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`,
+    )
+  )
+}
+
+function normalizeForCompare(path: string): string {
+  return process.platform === 'win32' ? path.toLowerCase() : path
+}
+
+function isSafeMentionPattern(pattern: string): boolean {
+  if (pattern.length > MENTION_PATTERN_MAX_LENGTH) return false
+  return !/\([^)]*[+*][^)]*\)\s*(?:[+*]|\{\d*,?\d*\})/.test(pattern)
 }

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import spawn from 'cross-spawn'
 import { loadThreads, removeThread, saveThread } from './state.js'
 import type { QueuedMessage, StatePaths } from './types.js'
 
@@ -137,6 +137,14 @@ async function runCodexProcess(
       reject(new Error(`codex timed out after ${options.timeoutMs}ms`))
     }, options.timeoutMs)
 
+    if (!child.stdout || !child.stderr) {
+      settled = true
+      clearTimeout(timer)
+      child.kill('SIGTERM')
+      reject(new Error('codex process did not provide stdout/stderr pipes'))
+      return
+    }
+
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
 
@@ -175,7 +183,7 @@ async function runCodexProcess(
         return
       }
 
-      const text = finalText.trim() || stdout.trim() || 'Codex completed without a final message.'
+      const text = finalText.trim() || 'Codex completed without a final message.'
       resolve({ text, threadId })
     })
 

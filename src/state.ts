@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { Access, QueuedMessage, StatePaths, ThreadMap } from './types.js'
@@ -200,11 +201,18 @@ export function clearStateFile(path: string): void {
 function readJson<T>(path: string, fallback: T): T
 function readJson<T>(path: string, fallback: T | undefined): T | undefined
 function readJson<T>(path: string, fallback: T | undefined): T | undefined {
+  let raw: string
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T
+    raw = readFileSync(path, 'utf8')
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return fallback
+    throw err
+  }
+
+  try {
+    return JSON.parse(raw) as T
+  } catch {
     try {
       renameSync(path, `${path}.corrupt-${Date.now()}`)
     } catch {}
@@ -214,7 +222,35 @@ function readJson<T>(path: string, fallback: T | undefined): T | undefined {
 
 function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-  const tmp = `${path}.tmp`
+  const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
-  renameSync(tmp, path)
+  try {
+    renameWithRetry(tmp, path)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+function renameWithRetry(from: string, to: string): void {
+  const delays = [0, 25, 75, 150]
+  let lastError: unknown
+
+  for (const delay of delays) {
+    if (delay > 0) sleep(delay)
+    try {
+      renameSync(from, to)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EBUSY') throw err
+      lastError = err
+    }
+  }
+
+  throw lastError
+}
+
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
