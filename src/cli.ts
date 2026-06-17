@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
 import spawn from 'cross-spawn'
@@ -468,8 +468,16 @@ if (isDirectRun()) {
   })
 }
 
-function isDirectRun(): boolean {
-  const entry = process.argv[1]
+export function isDirectRun(entry = process.argv[1], moduleUrl = import.meta.url): boolean {
   if (!entry) return false
-  return resolve(entry) === fileURLToPath(import.meta.url)
+  return canonicalPath(entry) === canonicalPath(fileURLToPath(moduleUrl))
+}
+
+function canonicalPath(path: string): string {
+  const resolved = resolve(path)
+  try {
+    return realpathSync(resolved)
+  } catch {
+    return resolved
+  }
 }
