@@ -11,6 +11,7 @@ import {
   type DoctorReport,
 } from '../src/cli.js'
 import { buildUnsafeBotModeWarning } from '../src/safety.js'
+import { acquireProcessLock } from '../src/state.js'
 
 describe('buildConfigSnippet', () => {
   it('prints an npx-compatible MCP config', () => {
@@ -100,5 +101,41 @@ describe('buildUnsafeBotModeWarning', () => {
         { CODEX_DISCORD_ASSUME_YES: 'true' },
       ),
     ).toBeUndefined()
+  })
+})
+
+describe('acquireProcessLock', () => {
+  it('refuses to acquire a lock held by a live process', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-discord-mcp-'))
+    try {
+      const lockFile = join(dir, 'bot.pid')
+      writeFileSync(lockFile, `${process.pid}\n`)
+
+      expect(() => acquireProcessLock(lockFile, 'test relay')).toThrow(
+        /test relay is already running/,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('replaces a stale lock and releases only its own pid file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-discord-mcp-'))
+    try {
+      const lockFile = join(dir, 'bot.pid')
+      writeFileSync(lockFile, 'not-a-pid\n')
+
+      const lock = acquireProcessLock(lockFile, 'test relay', 12345)
+      expect(lock.pid).toBe(12345)
+      expect(lock.path).toBe(lockFile)
+
+      writeFileSync(lockFile, `${process.pid}\n`)
+      lock.release()
+      expect(() => acquireProcessLock(lockFile, 'test relay', 12345)).toThrow(
+        /test relay is already running/,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

@@ -3,6 +3,7 @@ import { DiscordBridge } from './discord.js'
 import { warnUnsafeBotMode } from './safety.js'
 import { installShutdownHandlers } from './shutdown.js'
 import {
+  acquireProcessLock,
   getStatePaths,
   listPendingMessages,
   loadStateEnv,
@@ -21,6 +22,7 @@ export async function runRelay(): Promise<void> {
     )
   }
 
+  const lock = acquireProcessLock(paths.botPidFile, 'codex-discord relay')
   const bridge = new DiscordBridge(token, paths)
   const codexOptions = codexOptionsFromEnv()
   warnUnsafeBotMode(codexOptions)
@@ -47,10 +49,21 @@ export async function runRelay(): Promise<void> {
 
   installShutdownHandlers({
     label: 'codex-discord relay',
-    stop: () => bridge.stop(),
+    stop: async () => {
+      try {
+        await bridge.stop()
+      } finally {
+        lock.release()
+      }
+    },
   })
-  await bridge.start()
-  process.stderr.write('codex-discord relay: ready\n')
+  try {
+    await bridge.start()
+    process.stderr.write('codex-discord relay: ready\n')
+  } catch (err) {
+    lock.release()
+    throw err
+  }
 }
 
 async function processMessage(

@@ -7,7 +7,7 @@ A local-first Discord bridge for Codex CLI.
 Use it in three ways:
 
 1. Discord -> Codex: mention or DM your bot, run `codex exec --json`, and post the final answer back to Discord.
-2. Codex -> Discord: expose Discord tools to Codex through MCP, including `reply`, `fetch_messages`, `react`, `edit_message`, and `download_attachment`.
+2. Codex -> Discord: expose Discord tools to Codex through MCP, including `reply`, `fetch_messages`, `react`, `edit_message`, `download_attachment`, and `latest_generated_images`.
 3. Hybrid workflow: receive Discord messages into a local queue, then let Codex inspect and respond through MCP tools.
 
 This is not an official OpenAI plugin. It is a local bridge designed around Codex CLI, MCP, and Discord bot APIs.
@@ -194,6 +194,7 @@ Available MCP tools:
 | `send_message` | Medium | Sends a Discord message |
 | `edit_message` | Medium | Edits a message previously sent by the bot |
 | `download_attachment` | Medium | Downloads Discord attachments into the local inbox |
+| `latest_generated_images` | Low | Returns absolute paths of the newest images from Codex's `image_gen` output dir |
 | `mark_message_handled` | Medium | Mutates local queue state |
 
 ## Access Control
@@ -225,6 +226,11 @@ Attachment uploads are restricted by default to:
 - the bridge process working directory
 - `CODEX_WORKDIR`
 - the bridge inbox
+- Codex's built-in `image_gen` output directory (`~/.codex/generated_images`, or `CODEX_DISCORD_GENERATED_IMAGES_DIR`)
+
+The `image_gen` output directory is always allowed so generated images can be
+attached. Call `latest_generated_images` to get the absolute path of the image
+you just generated, then pass it in the `files` array of `reply`/`send_message`.
 
 To allow generated files from other roots, set `CODEX_DISCORD_ATTACHMENT_ROOTS` using your platform path delimiter:
 
@@ -255,6 +261,7 @@ $env:CODEX_DISCORD_ATTACHMENT_ROOTS="C:\path\to\repo;C:\path\to\exports"
 | `CODEX_EXTRA_ARGS` | unset | Extra arguments passed to Codex |
 | `CODEX_SKIP_GIT_REPO_CHECK` | `true` | Pass `--skip-git-repo-check` to `codex exec` |
 | `CODEX_DISCORD_ATTACHMENT_ROOTS` | cwd, workdir, inbox | Allowed outbound file roots |
+| `CODEX_DISCORD_GENERATED_IMAGES_DIR` | `~/.codex/generated_images` | Codex `image_gen` output dir surfaced by `latest_generated_images` and always allowed for attachments |
 | `CODEX_DISCORD_ASSUME_YES` | `false` | Suppress writable unattended bot warning |
 
 ## Troubleshooting

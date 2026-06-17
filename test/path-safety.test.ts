@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { join, sep } from 'node:path'
-import { isPathInsideOrEqual } from '../src/discord.js'
+import { attachmentRootCandidates, isPathInsideOrEqual } from '../src/discord.js'
 
 // Build paths with join/sep so the assertions hold on both POSIX and Windows.
 const root = join(sep, 'srv', 'repo')
@@ -25,5 +25,35 @@ describe('isPathInsideOrEqual', () => {
 
   it('rejects an unrelated path', () => {
     expect(isPathInsideOrEqual(join(sep, 'etc', 'passwd'), root)).toBe(false)
+  })
+})
+
+describe('attachmentRootCandidates', () => {
+  const inbox = join(sep, 'state', 'inbox')
+  const imageDir = join(sep, 'home', '.codex', 'generated_images')
+
+  it('uses cwd, CODEX_WORKDIR, inbox, and the image dir by default', () => {
+    const roots = attachmentRootCandidates(inbox, {
+      CODEX_WORKDIR: join(sep, 'work'),
+      CODEX_HOME: join(sep, 'home', '.codex'),
+    })
+    expect(roots).toContain(process.cwd())
+    expect(roots).toContain(join(sep, 'work'))
+    expect(roots).toContain(inbox)
+    expect(roots).toContain(imageDir)
+  })
+
+  it('replaces cwd/workdir with configured roots but always keeps inbox + image dir', () => {
+    const exportsDir = join(sep, 'home', 'ubuntu', 'exports')
+    const roots = attachmentRootCandidates(inbox, {
+      CODEX_DISCORD_ATTACHMENT_ROOTS: exportsDir,
+      CODEX_WORKDIR: join(sep, 'work'),
+      CODEX_HOME: join(sep, 'home', '.codex'),
+    })
+    expect(roots).toContain(exportsDir)
+    expect(roots).toContain(inbox)
+    expect(roots).toContain(imageDir)
+    expect(roots).not.toContain(join(sep, 'work'))
+    expect(roots).not.toContain(process.cwd())
   })
 })

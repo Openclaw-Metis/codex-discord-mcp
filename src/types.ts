@@ -55,6 +55,7 @@ export type StatePaths = {
   envFile: string
   accessFile: string
   approvedDir: string
+  botPidFile: string
   inboxDir: string
   queueFile: string
   threadsFile: string

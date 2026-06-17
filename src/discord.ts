@@ -19,6 +19,7 @@ import {
   type Message,
 } from 'discord.js'
 import { sanitizeOneLine, splitDiscordText } from './chunk.js'
+import { generatedImagesDir } from './images.js'
 import {
   appendQueuedMessage,
   loadAccess,
@@ -444,25 +445,17 @@ export class DiscordBridge extends EventEmitter {
   }
 
   private attachmentRoots(): string[] {
-    const configured = process.env.CODEX_DISCORD_ATTACHMENT_ROOTS
-    const roots =
-      configured?.trim()
-        ? [...configured.split(delimiter), this.paths.inboxDir]
-        : [process.cwd(), process.env.CODEX_WORKDIR, this.paths.inboxDir]
-
-    return roots
-      .filter((root): root is string => Boolean(root?.trim()))
-      .flatMap(root => {
-        try {
-          return [realpathSync(root)]
-        } catch {
-          if (!this.warnedAttachmentRoots.has(root)) {
-            this.warnedAttachmentRoots.add(root)
-            process.stderr.write(`discord bridge: skipping unresolved attachment root: ${root}\n`)
-          }
-          return []
+    return attachmentRootCandidates(this.paths.inboxDir).flatMap(root => {
+      try {
+        return [realpathSync(root)]
+      } catch {
+        if (!this.warnedAttachmentRoots.has(root)) {
+          this.warnedAttachmentRoots.add(root)
+          process.stderr.write(`discord bridge: skipping unresolved attachment root: ${root}\n`)
         }
-      })
+        return []
+      }
+    })
   }
 
   private noteSent(messageId: string): void {
@@ -490,6 +483,23 @@ function safeAttachmentName(attachment: Attachment): string {
 function safeExtension(name: string): string {
   const raw = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : 'bin'
   return raw.replace(/[^A-Za-z0-9]/g, '') || 'bin'
+}
+
+// Candidate attachment roots before symlink resolution. Codex's image_gen
+// output directory is always appended so generated images stay attachable
+// regardless of CODEX_DISCORD_ATTACHMENT_ROOTS.
+export function attachmentRootCandidates(
+  inboxDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const configured = env.CODEX_DISCORD_ATTACHMENT_ROOTS
+  const base = configured?.trim()
+    ? [...configured.split(delimiter), inboxDir]
+    : [process.cwd(), env.CODEX_WORKDIR, inboxDir]
+
+  return [...base, generatedImagesDir(env)].filter(
+    (root): root is string => Boolean(root?.trim()),
+  )
 }
 
 export function isPathInsideOrEqual(path: string, root: string): boolean {
