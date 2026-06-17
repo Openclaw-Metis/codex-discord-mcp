@@ -11,7 +11,7 @@
     ".env.example"
   ],
   "bin": {
-    "codex-discord-mcp": "./dist/cli.js"
+    "codex-discord-mcp": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
