@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   buildConfigSnippet,
   buildInviteUrl,
   formatDoctorReport,
+  isDirectRun,
   type DoctorReport,
 } from '../src/cli.js'
 import { buildUnsafeBotModeWarning } from '../src/safety.js'
@@ -25,6 +30,27 @@ describe('buildInviteUrl', () => {
     expect(url.searchParams.get('client_id')).toBe('123456789012345678')
     expect(url.searchParams.get('scope')).toContain('bot')
     expect(url.searchParams.get('scope')).toContain('applications.commands')
+  })
+})
+
+describe('isDirectRun', () => {
+  it('recognizes npm-linked CLI symlinks as direct runs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-discord-mcp-'))
+    try {
+      const distDir = join(dir, 'dist')
+      const binDir = join(dir, 'bin')
+      mkdirSync(distDir)
+      mkdirSync(binDir)
+
+      const target = join(distDir, 'cli.js')
+      const link = join(binDir, 'codex-discord-mcp')
+      writeFileSync(target, '#!/usr/bin/env node\n')
+      symlinkSync(target, link)
+
+      expect(isDirectRun(link, pathToFileURL(target).href)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

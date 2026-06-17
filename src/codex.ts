@@ -79,21 +79,32 @@ export class CodexRunner {
   }
 
   private buildArgs(prompt: string, threadId: string | undefined): string[] {
-    const common = ['exec', '--json']
-    if (this.options.skipGitRepoCheck) common.push('--skip-git-repo-check')
-    common.push('--sandbox', this.options.sandbox)
-    common.push('--ask-for-approval', this.options.approvalPolicy)
-    if (this.options.model) common.push('--model', this.options.model)
-    if (this.options.profile) common.push('--profile', this.options.profile)
-    common.push('--cd', this.options.workdir)
-    common.push(...this.options.extraArgs)
-
-    if (threadId) {
-      return [...common, 'resume', threadId, prompt]
-    }
-
-    return [...common, prompt]
+    return buildCodexExecArgs(this.options, prompt, threadId)
   }
+}
+
+export function buildCodexExecArgs(
+  options: Pick<
+    CodexRunnerOptions,
+    'skipGitRepoCheck' | 'sandbox' | 'approvalPolicy' | 'model' | 'profile' | 'workdir' | 'extraArgs'
+  >,
+  prompt: string,
+  threadId: string | undefined,
+): string[] {
+  const common = ['exec', '--json']
+  if (options.skipGitRepoCheck) common.push('--skip-git-repo-check')
+  common.push('--sandbox', options.sandbox)
+  common.push('--config', `approval_policy=${JSON.stringify(options.approvalPolicy)}`)
+  if (options.model) common.push('--model', options.model)
+  if (options.profile) common.push('--profile', options.profile)
+  common.push('--cd', options.workdir)
+  common.push(...options.extraArgs)
+
+  if (threadId) {
+    return [...common, 'resume', threadId, prompt]
+  }
+
+  return [...common, prompt]
 }
 
 export function buildDiscordPrompt(message: QueuedMessage): string {
@@ -137,6 +148,9 @@ async function runCodexProcess(
       cwd: options.cwd,
       env: buildCodexChildEnv(),
       windowsHide: true,
+      // Close stdin. The prompt is passed as a positional arg, and `codex exec`
+      // otherwise blocks reading stdin for an appended `<stdin>` block until EOF.
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     let stdout = ''

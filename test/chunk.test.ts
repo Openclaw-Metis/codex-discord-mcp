@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { splitDiscordText } from '../src/chunk.js'
-import { buildDiscordPrompt, parseExtraArgs } from '../src/codex.js'
+import { buildCodexExecArgs, buildDiscordPrompt, parseExtraArgs } from '../src/codex.js'
 import { isSafeMentionPattern } from '../src/discord.js'
 import type { QueuedMessage } from '../src/types.js'
 
@@ -38,6 +38,28 @@ describe('parseExtraArgs', () => {
       '--search',
       '--strict-config',
     ])
+  })
+})
+
+describe('buildCodexExecArgs', () => {
+  it('passes approval policy through config for codex exec', () => {
+    const args = buildCodexExecArgs(
+      {
+        skipGitRepoCheck: true,
+        sandbox: 'read-only',
+        approvalPolicy: 'never',
+        model: undefined,
+        profile: undefined,
+        workdir: '/repo',
+        extraArgs: [],
+      },
+      'hello',
+      undefined,
+    )
+
+    expect(args).toContain('--config')
+    expect(args).toContain('approval_policy="never"')
+    expect(args).not.toContain('--ask-for-approval')
   })
 })
 
