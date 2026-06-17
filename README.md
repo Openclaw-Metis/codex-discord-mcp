@@ -1,5 +1,7 @@
 # codex-discord-mcp
 
+[![CI](https://github.com/Openclaw-Metis/codex-discord-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Openclaw-Metis/codex-discord-mcp/actions/workflows/ci.yml)
+
 A local-first Discord bridge for Codex CLI.
 
 Use it in three ways:
