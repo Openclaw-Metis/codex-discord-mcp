@@ -52,14 +52,14 @@ export class CodexRunner {
     })
 
     if (this.options.resumeByChannel && result.threadId) {
-      saveThread(message.chatId, result.threadId, this.paths)
+      await saveThread(message.chatId, result.threadId, this.paths)
     }
 
     return result
   }
 
-  forgetThread(chatId: string): void {
-    removeThread(chatId, this.paths)
+  async forgetThread(chatId: string): Promise<void> {
+    await removeThread(chatId, this.paths)
   }
 
   private buildArgs(prompt: string, threadId: string | undefined): string[] {

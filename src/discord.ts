@@ -31,6 +31,7 @@ const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const RECENT_SENT_CAP = 200
 const MENTION_PATTERN_MAX_LENGTH = 128
 const MENTION_PATTERN_TEXT_LIMIT = 512
+const APPROVAL_CONFIRM_MAX_ATTEMPTS = 5
 
 export type DiscordBridgeEvents = {
   message: [QueuedMessage]
@@ -41,6 +42,8 @@ export class DiscordBridge extends EventEmitter {
   private readonly recentSentIds = new Set<string>()
   private readonly dmChannelUsers = new Map<string, string>()
   private readonly approvalInFlight = new Set<string>()
+  private readonly approvalFailures = new Map<string, number>()
+  private readonly warnedAttachmentRoots = new Set<string>()
   private approvalTimer: NodeJS.Timeout | undefined
 
   constructor(
@@ -90,10 +93,9 @@ export class DiscordBridge extends EventEmitter {
     replyTo?: string
     files?: string[]
   }): Promise<string[]> {
-    const channel = await this.fetchAllowedChannel(params.chatId)
+    const { channel, access } = await this.fetchAllowedChannelWithAccess(params.chatId)
     if (!('send' in channel)) throw new Error('channel is not sendable')
 
-    const access = loadAccess(this.paths)
     const limit = Math.max(1, Math.min(access.textChunkLimit ?? 2000, 2000))
     const chunks = splitDiscordText(params.text, limit, access.chunkMode ?? 'newline')
     const files = params.files ?? []
@@ -207,7 +209,7 @@ export class DiscordBridge extends EventEmitter {
     }
 
     const queued = this.toQueuedMessage(message)
-    appendQueuedMessage(queued, this.paths)
+    await appendQueuedMessage(queued, this.paths)
     this.emit('message', queued)
   }
 
@@ -217,7 +219,7 @@ export class DiscordBridge extends EventEmitter {
     | { action: 'pair'; code: string; isResend: boolean }
   > {
     const access = loadAccess(this.paths)
-    if (pruneExpiredPending(access)) saveAccess(access, this.paths)
+    if (pruneExpiredPending(access)) await saveAccess(access, this.paths)
 
     const senderId = message.author.id
     const isDm = message.channel.type === ChannelType.DM
@@ -231,7 +233,7 @@ export class DiscordBridge extends EventEmitter {
         if (pending.senderId !== senderId) continue
         if ((pending.replies ?? 1) >= 2) return { action: 'drop' }
         pending.replies = (pending.replies ?? 1) + 1
-        saveAccess(access, this.paths)
+        await saveAccess(access, this.paths)
         return { action: 'pair', code, isResend: true }
       }
 
@@ -247,7 +249,7 @@ export class DiscordBridge extends EventEmitter {
         expiresAt: now + 60 * 60 * 1000,
         replies: 1,
       }
-      saveAccess(access, this.paths)
+      await saveAccess(access, this.paths)
       return { action: 'pair', code, isResend: false }
     }
 
@@ -322,15 +324,21 @@ export class DiscordBridge extends EventEmitter {
   }
 
   private async fetchAllowedChannel(id: string): Promise<any> {
+    return (await this.fetchAllowedChannelWithAccess(id)).channel
+  }
+
+  private async fetchAllowedChannelWithAccess(
+    id: string,
+  ): Promise<{ channel: any; access: ReturnType<typeof loadAccess> }> {
     const channel = await this.fetchTextChannel(id)
     const access = loadAccess(this.paths)
 
     if (channel.type === ChannelType.DM) {
       const userId = channel.recipientId ?? channel.recipient?.id ?? this.dmChannelUsers.get(id)
-      if (userId && access.allowUsers.includes(userId)) return channel
+      if (userId && access.allowUsers.includes(userId)) return { channel, access }
     } else {
       const channelId = channel.isThread() ? channel.parentId ?? channel.id : channel.id
-      if (access.channels[channelId]) return channel
+      if (access.channels[channelId]) return { channel, access }
     }
 
     throw new Error(`channel ${id} is not allowlisted`)
@@ -386,9 +394,24 @@ export class DiscordBridge extends EventEmitter {
           if ('send' in channel) return channel.send('Paired. Send a message to Codex.')
           return undefined
         })
-        .then(() => rmSync(file, { force: true }))
+        .then(() => {
+          this.approvalFailures.delete(senderId)
+          rmSync(file, { force: true })
+        })
         .catch(err => {
-          process.stderr.write(`discord bridge: failed to confirm pairing: ${err}\n`)
+          const failures = (this.approvalFailures.get(senderId) ?? 0) + 1
+          this.approvalFailures.set(senderId, failures)
+          if (failures >= APPROVAL_CONFIRM_MAX_ATTEMPTS) {
+            process.stderr.write(
+              `discord bridge: giving up on pairing confirmation for ${senderId} after ${failures} attempts: ${err}\n`,
+            )
+            this.approvalFailures.delete(senderId)
+            rmSync(file, { force: true })
+            return
+          }
+          process.stderr.write(
+            `discord bridge: failed to confirm pairing for ${senderId} (${failures}/${APPROVAL_CONFIRM_MAX_ATTEMPTS}): ${err}\n`,
+          )
         })
         .finally(() => this.approvalInFlight.delete(senderId))
     }
@@ -430,6 +453,10 @@ export class DiscordBridge extends EventEmitter {
         try {
           return [realpathSync(root)]
         } catch {
+          if (!this.warnedAttachmentRoots.has(root)) {
+            this.warnedAttachmentRoots.add(root)
+            process.stderr.write(`discord bridge: skipping unresolved attachment root: ${root}\n`)
+          }
           return []
         }
       })
@@ -477,7 +504,13 @@ function normalizeForCompare(path: string): string {
   return process.platform === 'win32' ? path.toLowerCase() : path
 }
 
-function isSafeMentionPattern(pattern: string): boolean {
+export function isSafeMentionPattern(pattern: string): boolean {
   if (pattern.length > MENTION_PATTERN_MAX_LENGTH) return false
-  return !/\([^)]*[+*][^)]*\)\s*(?:[+*]|\{\d*,?\d*\})/.test(pattern)
+  const quantifiedGroup = String.raw`(?:[+*]|\{\d*,?\d*\})`
+  const unsafePatterns = [
+    new RegExp(String.raw`\([^)]*[+*][^)]*\)\s*${quantifiedGroup}`),
+    new RegExp(String.raw`\([^)]*\|[^)]*\)\s*${quantifiedGroup}`),
+    new RegExp(String.raw`\([^)]*\.[*+][^)]*\)\s*${quantifiedGroup}`),
+  ]
+  return !unsafePatterns.some(unsafe => unsafe.test(pattern))
 }

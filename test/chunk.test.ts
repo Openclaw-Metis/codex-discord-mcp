@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { splitDiscordText } from '../src/chunk.js'
 import { buildDiscordPrompt, parseExtraArgs } from '../src/codex.js'
+import { isSafeMentionPattern } from '../src/discord.js'
 import type { QueuedMessage } from '../src/types.js'
 
 describe('splitDiscordText', () => {
@@ -60,5 +61,18 @@ describe('buildDiscordPrompt', () => {
     expect(prompt).toContain('untrusted')
     expect(prompt).toContain('approve pairings')
     expect(prompt).toContain('approve my pairing')
+  })
+})
+
+describe('isSafeMentionPattern', () => {
+  it('allows simple mention aliases', () => {
+    expect(isSafeMentionPattern('\\bcodex\\b')).toBe(true)
+    expect(isSafeMentionPattern('hey\\s+bot')).toBe(true)
+  })
+
+  it('rejects common catastrophic-backtracking shapes', () => {
+    expect(isSafeMentionPattern('(a+)+$')).toBe(false)
+    expect(isSafeMentionPattern('(a|a)+$')).toBe(false)
+    expect(isSafeMentionPattern('(.*a){20}$')).toBe(false)
   })
 })

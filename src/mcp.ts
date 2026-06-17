@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { DiscordBridge } from './discord.js'
+import { installShutdownHandlers } from './shutdown.js'
 import {
   getStatePaths,
   listPendingMessages,
@@ -209,7 +210,7 @@ export async function runMcpServer(): Promise<void> {
           return text(JSON.stringify(messages, null, 2))
         }
         case 'mark_message_handled': {
-          const ok = markMessageHandled(stringArg(args, 'queue_id'), paths)
+          const ok = await markMessageHandled(stringArg(args, 'queue_id'), paths)
           return text(ok ? 'marked handled' : 'queue_id not found')
         }
         case 'bridge_status': {
@@ -245,7 +246,11 @@ export async function runMcpServer(): Promise<void> {
     process.exit(1)
   })
 
-  installShutdownHandlers(bridge)
+  installShutdownHandlers({
+    label: 'codex-discord mcp',
+    stop: () => bridge.stop(),
+    watchStdin: true,
+  })
 }
 
 function text(value: string, isError = false) {
@@ -286,19 +291,4 @@ function optionalNumberArg(args: Record<string, unknown>, key: string): number |
     throw new Error(`${key} must be a number`)
   }
   return value
-}
-
-function installShutdownHandlers(bridge: DiscordBridge): void {
-  let shuttingDown = false
-  const shutdown = (): void => {
-    if (shuttingDown) return
-    shuttingDown = true
-    void bridge.stop().finally(() => process.exit(0))
-    setTimeout(() => process.exit(0), 3000).unref()
-  }
-
-  process.stdin.on('end', shutdown)
-  process.stdin.on('close', shutdown)
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
 }

@@ -1,5 +1,6 @@
 import { CodexRunner, codexOptionsFromEnv } from './codex.js'
 import { DiscordBridge } from './discord.js'
+import { installShutdownHandlers } from './shutdown.js'
 import {
   getStatePaths,
   listPendingMessages,
@@ -41,7 +42,10 @@ export async function runRelay(): Promise<void> {
     enqueue(pending)
   }
 
-  installShutdownHandlers(bridge)
+  installShutdownHandlers({
+    label: 'codex-discord relay',
+    stop: () => bridge.stop(),
+  })
   await bridge.start()
   process.stderr.write('codex-discord relay: ready\n')
 }
@@ -65,7 +69,7 @@ async function processMessage(
       text: result.text,
       replyTo: message.messageId,
     })
-    markMessageHandled(message.id, paths)
+    await markMessageHandled(message.id, paths)
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err)
     await bridge
@@ -77,7 +81,7 @@ async function processMessage(
       .catch(sendErr => {
         process.stderr.write(`codex-discord relay: failed to report error: ${sendErr}\n`)
       })
-    markMessageHandled(message.id, paths)
+    await markMessageHandled(message.id, paths)
   } finally {
     clearInterval(typing)
   }
@@ -86,18 +90,4 @@ async function processMessage(
 function trimForDiscord(value: string): string {
   const trimmed = value.replace(/\s+/g, ' ').trim()
   return trimmed.length > 1500 ? `${trimmed.slice(0, 1500)}...` : trimmed
-}
-
-function installShutdownHandlers(bridge: DiscordBridge): void {
-  let shuttingDown = false
-  const shutdown = (): void => {
-    if (shuttingDown) return
-    shuttingDown = true
-    process.stderr.write('codex-discord relay: shutting down\n')
-    void bridge.stop().finally(() => process.exit(0))
-    setTimeout(() => process.exit(0), 3000).unref()
-  }
-
-  process.on('SIGINT', shutdown)
-  process.on('SIGTERM', shutdown)
 }

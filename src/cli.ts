@@ -28,7 +28,7 @@ async function main(): Promise<void> {
       configure(args)
       return
     case 'access':
-      accessCommand(args)
+      await accessCommand(args)
       return
     case 'print-config':
       printConfig()
@@ -54,7 +54,7 @@ function configure(args: string[]): void {
   process.stdout.write(`Wrote token to ${paths.envFile}\n`)
 }
 
-function accessCommand(args: string[]): void {
+async function accessCommand(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args
   const paths = getStatePaths()
   const access = loadAccess(paths)
@@ -65,13 +65,13 @@ function accessCommand(args: string[]): void {
       process.stdout.write(`${JSON.stringify(access, null, 2)}\n`)
       return
     case 'reset':
-      saveAccess(defaultAccess(), paths)
+      await saveAccess(defaultAccess(), paths)
       process.stdout.write(`Reset access policy in ${paths.accessFile}\n`)
       return
     case 'pair': {
       const code = rest[0]
       if (!code) throw new Error('Usage: codex-discord-mcp access pair <code>')
-      const approved = approvePendingCode(code, paths)
+      const approved = await approvePendingCode(code, paths)
       process.stdout.write(
         `Approved ${approved.username ?? approved.senderId} (${approved.senderId})\n`,
       )
@@ -83,7 +83,7 @@ function accessCommand(args: string[]): void {
         throw new Error('Usage: codex-discord-mcp access policy <pairing|allowlist|disabled>')
       }
       access.dmPolicy = policy
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(`DM policy set to ${policy}\n`)
       return
     }
@@ -91,7 +91,7 @@ function accessCommand(args: string[]): void {
       const userId = rest[0]
       if (!userId) throw new Error('Usage: codex-discord-mcp access allow-user <discord-user-id>')
       if (!access.allowUsers.includes(userId)) access.allowUsers.push(userId)
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(`Allowed user ${userId}\n`)
       return
     }
@@ -99,7 +99,7 @@ function accessCommand(args: string[]): void {
       const userId = rest[0]
       if (!userId) throw new Error('Usage: codex-discord-mcp access remove-user <discord-user-id>')
       access.allowUsers = access.allowUsers.filter(id => id !== userId)
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(`Removed user ${userId}\n`)
       return
     }
@@ -115,7 +115,7 @@ function accessCommand(args: string[]): void {
         requireMention: !rest.includes('--no-mention'),
         allowUsers,
       }
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(`Allowed channel ${channelId}\n`)
       return
     }
@@ -125,7 +125,7 @@ function accessCommand(args: string[]): void {
         throw new Error('Usage: codex-discord-mcp access remove-channel <channel-id>')
       }
       delete access.channels[channelId]
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(`Removed channel ${channelId}\n`)
       return
     }
@@ -133,12 +133,12 @@ function accessCommand(args: string[]): void {
       const value = rest[0]
       if (!value) throw new Error('Usage: codex-discord-mcp access ack <emoji|off>')
       access.ackReaction = value === 'off' ? undefined : value
-      saveAccess(access, paths)
+      await saveAccess(access, paths)
       process.stdout.write(value === 'off' ? 'Ack reaction disabled\n' : `Ack reaction set to ${value}\n`)
       return
     }
     case 'mention-pattern': {
-      mentionPatternCommand(rest)
+      await mentionPatternCommand(rest)
       return
     }
     case 'help':
@@ -151,7 +151,7 @@ function accessCommand(args: string[]): void {
   }
 }
 
-function mentionPatternCommand(args: string[]): void {
+async function mentionPatternCommand(args: string[]): Promise<void> {
   const [action, pattern] = args
   const paths = getStatePaths()
   const access = loadAccess(paths)
@@ -165,7 +165,7 @@ function mentionPatternCommand(args: string[]): void {
   if (action === 'add') {
     if (!pattern) throw new Error('Usage: codex-discord-mcp access mention-pattern add <regex>')
     if (!access.mentionPatterns.includes(pattern)) access.mentionPatterns.push(pattern)
-    saveAccess(access, paths)
+    await saveAccess(access, paths)
     process.stdout.write(`Added mention pattern ${pattern}\n`)
     return
   }
@@ -173,7 +173,7 @@ function mentionPatternCommand(args: string[]): void {
   if (action === 'remove') {
     if (!pattern) throw new Error('Usage: codex-discord-mcp access mention-pattern remove <regex>')
     access.mentionPatterns = access.mentionPatterns.filter(item => item !== pattern)
-    saveAccess(access, paths)
+    await saveAccess(access, paths)
     process.stdout.write(`Removed mention pattern ${pattern}\n`)
     return
   }

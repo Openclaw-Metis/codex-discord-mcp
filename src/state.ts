@@ -5,6 +5,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  promises as fsPromises,
   writeFileSync,
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -101,8 +102,8 @@ export function loadAccess(paths = getStatePaths()): Access {
   }
 }
 
-export function saveAccess(access: Access, paths = getStatePaths()): void {
-  writeJsonAtomic(paths.accessFile, access)
+export async function saveAccess(access: Access, paths = getStatePaths()): Promise<void> {
+  await writeJsonAtomic(paths.accessFile, access)
 }
 
 export function pruneExpiredPending(access: Access, now = Date.now()): boolean {
@@ -116,7 +117,10 @@ export function pruneExpiredPending(access: Access, now = Date.now()): boolean {
   return changed
 }
 
-export function approvePendingCode(code: string, paths = getStatePaths()): PendingEntryApproval {
+export async function approvePendingCode(
+  code: string,
+  paths = getStatePaths(),
+): Promise<PendingEntryApproval> {
   const access = loadAccess(paths)
   const pending = access.pending[code]
   if (!pending) {
@@ -124,7 +128,7 @@ export function approvePendingCode(code: string, paths = getStatePaths()): Pendi
   }
   if (pending.expiresAt <= Date.now()) {
     delete access.pending[code]
-    saveAccess(access, paths)
+    await saveAccess(access, paths)
     throw new Error(`Pairing code expired: ${code}`)
   }
 
@@ -132,7 +136,7 @@ export function approvePendingCode(code: string, paths = getStatePaths()): Pendi
     access.allowUsers.push(pending.senderId)
   }
   delete access.pending[code]
-  saveAccess(access, paths)
+  await saveAccess(access, paths)
 
   mkdirSync(paths.approvedDir, { recursive: true, mode: 0o700 })
   writeFileSync(join(paths.approvedDir, pending.senderId), pending.chatId, { mode: 0o600 })
@@ -146,11 +150,14 @@ export type PendingEntryApproval = {
   username?: string
 }
 
-export function appendQueuedMessage(message: QueuedMessage, paths = getStatePaths()): void {
+export async function appendQueuedMessage(
+  message: QueuedMessage,
+  paths = getStatePaths(),
+): Promise<void> {
   const queue = readQueue(paths)
   if (!queue.some(item => item.id === message.id)) {
     queue.push(message)
-    writeJsonAtomic(paths.queueFile, queue.slice(-500))
+    await writeJsonAtomic(paths.queueFile, queue.slice(-500))
   }
 }
 
@@ -164,7 +171,7 @@ export function listPendingMessages(limit = 20, paths = getStatePaths()): Queued
     .slice(0, Math.max(1, Math.min(limit, 100)))
 }
 
-export function markMessageHandled(id: string, paths = getStatePaths()): boolean {
+export async function markMessageHandled(id: string, paths = getStatePaths()): Promise<boolean> {
   const queue = readQueue(paths)
   let changed = false
   for (const item of queue) {
@@ -174,7 +181,7 @@ export function markMessageHandled(id: string, paths = getStatePaths()): boolean
       break
     }
   }
-  if (changed) writeJsonAtomic(paths.queueFile, queue)
+  if (changed) await writeJsonAtomic(paths.queueFile, queue)
   return changed
 }
 
@@ -182,16 +189,20 @@ export function loadThreads(paths = getStatePaths()): ThreadMap {
   return readJson<ThreadMap>(paths.threadsFile, {})
 }
 
-export function saveThread(chatId: string, threadId: string, paths = getStatePaths()): void {
+export async function saveThread(
+  chatId: string,
+  threadId: string,
+  paths = getStatePaths(),
+): Promise<void> {
   const threads = loadThreads(paths)
   threads[chatId] = threadId
-  writeJsonAtomic(paths.threadsFile, threads)
+  await writeJsonAtomic(paths.threadsFile, threads)
 }
 
-export function removeThread(chatId: string, paths = getStatePaths()): void {
+export async function removeThread(chatId: string, paths = getStatePaths()): Promise<void> {
   const threads = loadThreads(paths)
   delete threads[chatId]
-  writeJsonAtomic(paths.threadsFile, threads)
+  await writeJsonAtomic(paths.threadsFile, threads)
 }
 
 export function clearStateFile(path: string): void {
@@ -203,7 +214,7 @@ function readJson<T>(path: string, fallback: T | undefined): T | undefined
 function readJson<T>(path: string, fallback: T | undefined): T | undefined {
   let raw: string
   try {
-    raw = readFileSync(path, 'utf8')
+    raw = readFileWithRetry(path)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return fallback
@@ -220,26 +231,26 @@ function readJson<T>(path: string, fallback: T | undefined): T | undefined {
   }
 }
 
-function writeJsonAtomic(path: string, value: unknown): void {
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
+  await fsPromises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
   try {
-    renameWithRetry(tmp, path)
+    await renameWithRetry(tmp, path)
   } catch (err) {
-    rmSync(tmp, { force: true })
+    await fsPromises.rm(tmp, { force: true })
     throw err
   }
 }
 
-function renameWithRetry(from: string, to: string): void {
+async function renameWithRetry(from: string, to: string): Promise<void> {
   const delays = [0, 25, 75, 150]
   let lastError: unknown
 
   for (const delay of delays) {
-    if (delay > 0) sleep(delay)
+    if (delay > 0) await delayMs(delay)
     try {
-      renameSync(from, to)
+      await fsPromises.rename(from, to)
       return
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -251,6 +262,20 @@ function renameWithRetry(from: string, to: string): void {
   throw lastError
 }
 
-function sleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+function readFileWithRetry(path: string): string {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return readFileSync(path, 'utf8')
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EBUSY') throw err
+      lastError = err
+    }
+  }
+  throw lastError
+}
+
+async function delayMs(ms: number): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms))
 }
