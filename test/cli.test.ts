@@ -46,7 +46,13 @@ describe('isDirectRun', () => {
       const target = join(distDir, 'cli.js')
       const link = join(binDir, 'codex-discord-mcp')
       writeFileSync(target, '#!/usr/bin/env node\n')
-      symlinkSync(target, link)
+      try {
+        symlinkSync(target, link)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'EPERM' || code === 'EACCES') return
+        throw err
+      }
 
       expect(isDirectRun(link, pathToFileURL(target).href)).toBe(true)
     } finally {
