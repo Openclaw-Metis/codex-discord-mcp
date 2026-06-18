@@ -7,7 +7,7 @@ A local-first Discord bridge for Codex CLI.
 Use it in three ways:
 
 1. Discord -> Codex: mention or DM your bot, run `codex exec --json`, and post the final answer back to Discord.
-2. Codex -> Discord: expose Discord tools to Codex through MCP, including `reply`, `fetch_messages`, `react`, `edit_message`, `download_attachment`, and `latest_generated_images`.
+2. Codex -> Discord: expose Discord tools to Codex through MCP, including `reply`, `fetch_messages`, `react`, `edit_message`, `download_attachment`, `latest_generated_images`, and `recover_generated_image`.
 3. Hybrid workflow: receive Discord messages into a local queue, then let Codex inspect and respond through MCP tools.
 
 This is not an official OpenAI plugin. It is a local bridge designed around Codex CLI, MCP, and Discord bot APIs.
@@ -195,6 +195,7 @@ Available MCP tools:
 | `edit_message` | Medium | Edits a message previously sent by the bot |
 | `download_attachment` | Medium | Downloads Discord attachments into the local inbox |
 | `latest_generated_images` | Low | Returns absolute paths of the newest images from Codex's `image_gen` output dir |
+| `recover_generated_image` | Medium | Decodes the most recent `image_gen` image from the Codex session rollout and writes it to disk |
 | `mark_message_handled` | Medium | Mutates local queue state |
 
 ## Access Control
@@ -229,8 +230,12 @@ Attachment uploads are restricted by default to:
 - Codex's built-in `image_gen` output directory (`~/.codex/generated_images`, or `CODEX_DISCORD_GENERATED_IMAGES_DIR`)
 
 The `image_gen` output directory is always allowed so generated images can be
-attached. Call `latest_generated_images` to get the absolute path of the image
-you just generated, then pass it in the `files` array of `reply`/`send_message`.
+attached. Codex's built-in `image_gen` shows an inline preview but often writes
+no file to disk — in that case call `recover_generated_image`, which decodes the
+just-generated image from the active session rollout and saves it to the
+`image_gen` output dir, returning the absolute path. (`latest_generated_images`
+lists already-saved image files.) Then pass the path in the `files` array of
+`reply`/`send_message`.
 
 To allow generated files from other roots, set `CODEX_DISCORD_ATTACHMENT_ROOTS` using your platform path delimiter:
 
