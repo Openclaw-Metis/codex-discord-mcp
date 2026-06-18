@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { attachmentRootCandidates, DiscordBridge } from './discord.js'
 import { generatedImagesDir, listGeneratedImages } from './images.js'
+import { recoverGeneratedImages, sessionsDir } from './rollout.js'
 import { installShutdownHandlers } from './shutdown.js'
 import {
   getStatePaths,
@@ -41,7 +42,7 @@ export async function runMcpServer(): Promise<void> {
         '',
         'Use fetch_messages for recent history and download_attachment only when attachment metadata indicates files are present. Discord bot search is unavailable, so history lookup is limited to recent channel messages.',
         '',
-        'To send an image you just generated with the built-in image_gen tool: call latest_generated_images to get its absolute path (image_gen only shows an inline preview and does not hand you the saved path), then pass that path in the files array of reply or send_message.',
+        'To send an image you just generated with the built-in image_gen tool: image_gen renders an inline preview but usually writes NO file to disk, so call recover_generated_image to decode the just-generated image from the session rollout and save it (it returns the absolute path); then pass that path in the files array of reply or send_message. (latest_generated_images lists already-saved image files, if any.)',
         '',
         `Files attached via reply/send_message must already be saved under an allowed attachment root: ${attachmentRoots.join(', ')}. Save any non-image deliverable (md, html, zip, etc.) into the first of those directories before attaching it; files saved elsewhere are rejected. Generated images are always allowed.`,
       ].join('\n'),
@@ -145,6 +146,18 @@ export async function runMcpServer(): Promise<void> {
         },
       },
       {
+        name: 'recover_generated_image',
+        description:
+          "Recover the most recently generated image(s) from the active Codex session rollout and write them to disk. Codex's built-in image_gen shows an inline preview but usually writes no file; this decodes the image from the session log and saves it to the generated-images dir, returning absolute path(s) ready to pass to the files array of reply/send_message. Optional count (default 1) and session_file (absolute rollout path; defaults to the newest session).",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            count: { type: 'number' },
+            session_file: { type: 'string' },
+          },
+        },
+      },
+      {
         name: 'list_pending_messages',
         description:
           'List queued inbound Discord messages that have not been marked handled. Use this because Codex MCP has no Discord push channel.',
@@ -230,6 +243,31 @@ export async function runMcpServer(): Promise<void> {
             )
           }
           return text(JSON.stringify(images, null, 2))
+        }
+        case 'recover_generated_image': {
+          const { rolloutFile, images } = recoverGeneratedImages({
+            count: optionalNumberArg(args, 'count') ?? 1,
+            sessionFile: optionalStringArg(args, 'session_file'),
+          })
+          if (images.length === 0) {
+            return text(
+              rolloutFile
+                ? `no decodable generated image found in the latest rollout (${rolloutFile}). Generate one with the built-in image_gen tool first.`
+                : `no Codex session rollout found under ${sessionsDir()}.`,
+            )
+          }
+          return text(
+            JSON.stringify(
+              images.map(image => ({
+                path: image.path,
+                name: image.name,
+                size: image.size,
+                revised_prompt: image.revisedPrompt,
+              })),
+              null,
+              2,
+            ),
+          )
         }
         case 'list_pending_messages': {
           const messages = listPendingMessages(optionalNumberArg(args, 'limit') ?? 20, paths)
