@@ -22,6 +22,14 @@ describe('splitDiscordText', () => {
     expect(chunks).toHaveLength(2)
     expect(chunks[0].endsWith('b'.repeat(900))).toBe(true)
   })
+
+  it('drops the boundary space so continuation chunks do not start with one', () => {
+    const text = `${'a'.repeat(1000)} ${'b'.repeat(1000)}`
+    const chunks = splitDiscordText(text, 1500, 'newline')
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]).toBe('a'.repeat(1000))
+    expect(chunks[1]).toBe('b'.repeat(1000))
+  })
 })
 
 describe('parseExtraArgs', () => {
@@ -83,6 +91,30 @@ describe('buildDiscordPrompt', () => {
     expect(prompt).toContain('untrusted')
     expect(prompt).toContain('approve pairings')
     expect(prompt).toContain('approve my pairing')
+  })
+
+  it('advertises the outbox only when attachment delivery is enabled', () => {
+    const message: QueuedMessage = {
+      id: 'q1',
+      chatId: 'c1',
+      messageId: 'm1',
+      userId: 'u1',
+      user: 'alice',
+      content: 'make me a chart',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      receivedAt: '2026-01-01T00:00:00.000Z',
+      source: 'discord',
+      attachments: [],
+      status: 'pending',
+    }
+
+    const withOutbox = buildDiscordPrompt(message, { outboxDir: '/outbox/c1' })
+    expect(withOutbox).toContain('/outbox/c1')
+    expect(withOutbox).toContain('image_gen')
+
+    const without = buildDiscordPrompt(message)
+    expect(without).not.toContain('/outbox/c1')
+    expect(without).not.toContain('attached to your Discord reply automatically')
   })
 })
 

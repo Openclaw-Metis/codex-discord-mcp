@@ -31,8 +31,9 @@ describe('isPathInsideOrEqual', () => {
 describe('attachmentRootCandidates', () => {
   const inbox = join(sep, 'state', 'inbox')
   const imageDir = join(sep, 'home', '.codex', 'generated_images')
+  const outboxDir = join(sep, 'home', '.codex', 'discord_outbox')
 
-  it('uses cwd, CODEX_WORKDIR, inbox, and the image dir by default', () => {
+  it('uses cwd, CODEX_WORKDIR, inbox, image dir, and outbox by default', () => {
     const roots = attachmentRootCandidates(inbox, {
       CODEX_WORKDIR: join(sep, 'work'),
       CODEX_HOME: join(sep, 'home', '.codex'),
@@ -41,9 +42,10 @@ describe('attachmentRootCandidates', () => {
     expect(roots).toContain(join(sep, 'work'))
     expect(roots).toContain(inbox)
     expect(roots).toContain(imageDir)
+    expect(roots).toContain(outboxDir)
   })
 
-  it('replaces cwd/workdir with configured roots but always keeps inbox + image dir', () => {
+  it('replaces cwd/workdir with configured roots but always keeps inbox, image dir, and outbox', () => {
     const exportsDir = join(sep, 'home', 'ubuntu', 'exports')
     const roots = attachmentRootCandidates(inbox, {
       CODEX_DISCORD_ATTACHMENT_ROOTS: exportsDir,
@@ -53,6 +55,7 @@ describe('attachmentRootCandidates', () => {
     expect(roots).toContain(exportsDir)
     expect(roots).toContain(inbox)
     expect(roots).toContain(imageDir)
+    expect(roots).toContain(outboxDir)
     expect(roots).not.toContain(join(sep, 'work'))
     expect(roots).not.toContain(process.cwd())
   })

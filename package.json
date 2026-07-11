@@ -1,6 +1,6 @@
 {
   "name": "codex-discord-mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Discord bot bridge and MCP tools for Codex CLI.",
   "type": "module",
   "files": [

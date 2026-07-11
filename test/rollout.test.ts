@@ -1,12 +1,15 @@
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   extractImagesFromRolloutText,
+  findRolloutFileByThreadId,
   imageExt,
   newestRolloutFile,
+  readRolloutTextFrom,
   recoverGeneratedImages,
+  recoverImagesFromRolloutSince,
 } from '../src/rollout.js'
 
 const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
@@ -98,6 +101,69 @@ describe('newestRolloutFile', () => {
     writeFileSync(join(dir, 'notes.jsonl'), '{}')
     writeFileSync(join(dir, 'rollout-x.txt'), '{}')
     expect(newestRolloutFile(dir)).toBeUndefined()
+  })
+})
+
+describe('findRolloutFileByThreadId', () => {
+  let dir = ''
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'codex-find-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('finds the rollout whose name ends with the thread id, in a nested tree', () => {
+    const day = join(dir, '2026', '06', '18')
+    mkdirSync(day, { recursive: true })
+    const target = join(day, 'rollout-2026-06-18T00-00-00-abc-123.jsonl')
+    writeFileSync(target, '{}')
+    writeFileSync(join(day, 'rollout-2026-06-18T00-00-01-other-999.jsonl'), '{}')
+
+    expect(findRolloutFileByThreadId('abc-123', dir)).toBe(target)
+    expect(findRolloutFileByThreadId('missing-000', dir)).toBeUndefined()
+  })
+
+  it('rejects thread ids that are not uuid-shaped', () => {
+    expect(findRolloutFileByThreadId('../escape', dir)).toBeUndefined()
+  })
+})
+
+describe('readRolloutTextFrom / recoverImagesFromRolloutSince', () => {
+  let dir = ''
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'codex-since-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('reads only the bytes past the offset', () => {
+    const file = join(dir, 'rollout-x.jsonl')
+    writeFileSync(file, 'oldpart-newpart')
+    expect(readRolloutTextFrom(file, 8)).toBe('newpart')
+    expect(readRolloutTextFrom(file, 15)).toBe('')
+  })
+
+  it('re-reads from the start when the offset is past EOF (rotated file)', () => {
+    const file = join(dir, 'rollout-x.jsonl')
+    writeFileSync(file, 'fresh')
+    expect(readRolloutTextFrom(file, 9999)).toBe('fresh')
+  })
+
+  it('recovers only images appended after the offset', () => {
+    const file = join(dir, 'rollout-x.jsonl')
+    const oldPart = `${imageCall('ig_old', 'completed', 'old', pngBase64(1))}\n`
+    writeFileSync(file, oldPart)
+    const offset = Buffer.byteLength(oldPart)
+    writeFileSync(file, `${oldPart}${imageCall('ig_new', 'completed', 'new', pngBase64(2))}\n`)
+
+    const outDir = join(dir, 'out')
+    const images = recoverImagesFromRolloutSince(file, offset, { outDir })
+    expect(images).toHaveLength(1)
+    expect(images[0].revisedPrompt).toBe('new')
+
+    expect(recoverImagesFromRolloutSince(file, Buffer.byteLength(readFileSync(file)), { outDir })).toEqual([])
   })
 })
 

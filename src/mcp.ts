@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -16,7 +17,9 @@ import {
   readQueue,
 } from './state.js'
 
-const VERSION = '0.1.0'
+// Resolved from package.json so the advertised MCP server version cannot
+// drift from the published package version.
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version
 
 export async function runMcpServer(): Promise<void> {
   const paths = getStatePaths()

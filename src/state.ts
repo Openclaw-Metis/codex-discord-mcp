@@ -11,7 +11,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { Access, QueuedMessage, StatePaths, ThreadMap } from './types.js'
+import type { Access, GroupPolicy, QueuedMessage, StatePaths, ThreadMap } from './types.js'
 
 export function getStatePaths(stateDir = defaultStateDir()): StatePaths {
   return {
@@ -93,7 +93,7 @@ export function loadAccess(paths = getStatePaths()): Access {
   return {
     dmPolicy: parsed.dmPolicy ?? 'pairing',
     allowUsers: parsed.allowUsers ?? [],
-    channels: parsed.channels ?? {},
+    channels: normalizeChannels(parsed.channels),
     pending: parsed.pending ?? {},
     mentionPatterns: parsed.mentionPatterns,
     ackReaction: parsed.ackReaction,
@@ -101,6 +101,24 @@ export function loadAccess(paths = getStatePaths()): Access {
     textChunkLimit: parsed.textChunkLimit,
     chunkMode: parsed.chunkMode ?? 'newline',
   }
+}
+
+// access.json may be hand-edited; a channel entry missing fields must not
+// crash the inbound gate. Missing requireMention defaults to the safe value.
+function normalizeChannels(
+  channels: Record<string, Partial<GroupPolicy> | null> | undefined,
+): Record<string, GroupPolicy> {
+  const normalized: Record<string, GroupPolicy> = {}
+  for (const [channelId, policy] of Object.entries(channels ?? {})) {
+    if (!policy || typeof policy !== 'object') continue
+    normalized[channelId] = {
+      requireMention: policy.requireMention ?? true,
+      allowUsers: Array.isArray(policy.allowUsers)
+        ? policy.allowUsers.filter((user): user is string => typeof user === 'string')
+        : [],
+    }
+  }
+  return normalized
 }
 
 export async function saveAccess(access: Access, paths = getStatePaths()): Promise<void> {

@@ -80,11 +80,7 @@ async function processMessage(
   try {
     void bridge.sendTyping(message.chatId).catch(() => {})
     const result = await runner.runForMessage(message)
-    await bridge.sendMessage({
-      chatId: message.chatId,
-      text: result.text,
-      replyTo: message.messageId,
-    })
+    await sendResult(bridge, message, result.text, result.filePaths)
     await markMessageHandled(message.id, paths)
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err)
@@ -100,6 +96,34 @@ async function processMessage(
     await markMessageHandled(message.id, paths)
   } finally {
     clearInterval(typing)
+  }
+}
+
+// Deliver the run result, falling back to a text-only reply if attaching
+// fails — a bad file must not swallow the answer itself.
+async function sendResult(
+  bridge: DiscordBridge,
+  message: QueuedMessage,
+  text: string,
+  files: string[],
+): Promise<void> {
+  try {
+    await bridge.sendMessage({
+      chatId: message.chatId,
+      text,
+      replyTo: message.messageId,
+      files,
+    })
+  } catch (err) {
+    if (files.length === 0) throw err
+    process.stderr.write(
+      `codex-discord relay: attaching ${files.length} file(s) failed, retrying text-only: ${err}\n`,
+    )
+    await bridge.sendMessage({
+      chatId: message.chatId,
+      text: `${text}\n\n(${files.length} generated file(s) could not be attached)`,
+      replyTo: message.messageId,
+    })
   }
 }
 

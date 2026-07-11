@@ -31,7 +31,10 @@ export function splitDiscordText(
     }
 
     chunks.push(rest.slice(0, cut))
-    rest = rest.slice(cut).replace(/^\n+/, '')
+    rest = rest.slice(cut)
+    // Drop the boundary separator itself: one space for a word cut, the blank
+    // line(s) for a newline cut. Deeper indentation is preserved.
+    rest = rest.startsWith(' ') ? rest.slice(1) : rest.replace(/^\n+/, '')
   }
 
   if (rest.length > 0) chunks.push(rest)

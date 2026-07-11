@@ -1,4 +1,15 @@
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { basename, join } from 'node:path'
 import { codexHome, generatedImagesDir } from './images.js'
 
@@ -25,6 +36,29 @@ export function newestRolloutFile(
   walk(dir, maxDepth, path => {
     const name = basename(path)
     if (!name.startsWith('rollout-') || !name.endsWith('.jsonl')) return
+    try {
+      const mtimeMs = statSync(path).mtimeMs
+      if (!best || mtimeMs > best.mtimeMs) best = { path, mtimeMs }
+    } catch {
+      // unreadable entry
+    }
+  })
+  return best?.path
+}
+
+// Rollout filenames end with the session/thread id (`rollout-<ts>-<id>.jsonl`),
+// which is the id `codex exec --json` reports in its thread.started event.
+export function findRolloutFileByThreadId(
+  threadId: string,
+  dir: string = sessionsDir(),
+  maxDepth = DEFAULT_MAX_DEPTH,
+): string | undefined {
+  if (!/^[0-9a-f-]+$/i.test(threadId)) return undefined
+  const suffix = `-${threadId}.jsonl`
+  let best: { path: string; mtimeMs: number } | undefined
+  walk(dir, maxDepth, path => {
+    const name = basename(path)
+    if (!name.startsWith('rollout-') || !name.endsWith(suffix)) return
     try {
       const mtimeMs = statSync(path).mtimeMs
       if (!best || mtimeMs > best.mtimeMs) best = { path, mtimeMs }
@@ -147,15 +181,63 @@ export function recoverGeneratedImages(
     return { rolloutFile, images: [] }
   }
 
-  const all = extractImagesFromRolloutText(text)
-  const chosen = all.slice(-count) // most recent `count`, oldest-first within the slice
+  const chosen = extractImagesFromRolloutText(text).slice(-count)
+  return { rolloutFile, images: writeRecoveredImages(chosen, options.outDir) }
+}
 
-  const outDir = options.outDir ?? generatedImagesDir()
+// Read the rollout from a byte offset (the pre-run file size), so a run only
+// pays for what it appended — resumed rollouts grow to tens of MB. An offset
+// past EOF means the file was replaced or truncated; re-read it in full.
+export function readRolloutTextFrom(path: string, offset: number): string {
+  const fd = openSync(path, 'r')
+  try {
+    const size = fstatSync(fd).size
+    const start = offset > size ? 0 : Math.max(0, offset)
+    const length = size - start
+    if (length <= 0) return ''
+    const buffer = Buffer.alloc(length)
+    let read = 0
+    while (read < length) {
+      const bytes = readSync(fd, buffer, read, length - read, start + read)
+      if (bytes <= 0) break
+      read += bytes
+    }
+    return buffer.subarray(0, read).toString('utf8')
+  } finally {
+    closeSync(fd)
+  }
+}
+
+// Recover only the images that appeared after `offset` — i.e. the ones the
+// current run generated — and write them to the generated-images dir.
+export function recoverImagesFromRolloutSince(
+  rolloutFile: string,
+  offset: number,
+  options: { limit?: number; outDir?: string } = {},
+): RecoveredImage[] {
+  let text: string
+  try {
+    text = readRolloutTextFrom(rolloutFile, offset)
+  } catch {
+    return []
+  }
+  if (!text) return []
+
+  const limit = Math.max(1, Math.min(options.limit ?? MAX_COUNT, MAX_COUNT))
+  return writeRecoveredImages(extractImagesFromRolloutText(text).slice(-limit), options.outDir)
+}
+
+function writeRecoveredImages(
+  images: RolloutImage[],
+  outDir = generatedImagesDir(),
+): RecoveredImage[] {
+  if (images.length === 0) return []
   mkdirSync(outDir, { recursive: true, mode: 0o700 })
 
   const stamp = Date.now()
-  const images: RecoveredImage[] = chosen.map((img, i) => {
-    const name = `recovered-${stamp}-${i + 1}.${img.ext}`
+  const nonce = randomBytes(3).toString('hex')
+  return images.map((img, i) => {
+    const name = `recovered-${stamp}-${nonce}-${i + 1}.${img.ext}`
     const path = join(outDir, name)
     writeFileSync(path, img.buffer, { mode: 0o600 })
     return {
@@ -167,6 +249,4 @@ export function recoverGeneratedImages(
       revisedPrompt: img.revisedPrompt,
     }
   })
-
-  return { rolloutFile, images }
 }

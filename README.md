@@ -143,6 +143,7 @@ Default behavior:
 - Pair locally with `codex-discord-mcp access pair <code>`.
 - After pairing, each DM message triggers `codex exec --json`.
 - The final Codex message is posted as a Discord reply.
+- Files the run produced are attached to that reply automatically (see below).
 
 Useful environment variables:
 
@@ -155,6 +156,15 @@ codex-discord-mcp bot
 ```
 
 For unattended relay mode, keep `CODEX_APPROVAL_POLICY=never` and use the least permissive sandbox that fits the channel.
+
+### Relay File Delivery
+
+`bot` mode delivers files, not just text, on by default (`CODEX_DISCORD_RELAY_ATTACHMENTS=false` disables both paths):
+
+- **Generated images.** Codex's built-in `image_gen` usually writes no file to disk; the image survives only as base64 inside the session rollout. The relay records the rollout size before each run and, after the run, decodes any `image_generation_call` results appended past that offset — so it attaches exactly the images this run generated, even on long resumed threads, without re-reading the whole rollout.
+- **Outbox deliverables.** The prompt tells Codex to save user-facing files under a per-channel outbox directory (`CODEX_DISCORD_OUTBOX_DIR`, default `~/.codex/discord_outbox/<channel-id>/`). Document, data, archive, and media files written there during the run are attached to the reply; code files, logs, and dotfiles are ignored.
+
+Attachments respect Discord limits: at most 10 files per reply, 25MB each. If attaching fails, the relay retries text-only so the answer itself is never lost.
 
 ## Mode 2: Codex MCP Tools
 
@@ -228,6 +238,7 @@ Attachment uploads are restricted by default to:
 - `CODEX_WORKDIR`
 - the bridge inbox
 - Codex's built-in `image_gen` output directory (`~/.codex/generated_images`, or `CODEX_DISCORD_GENERATED_IMAGES_DIR`)
+- the relay outbox (`~/.codex/discord_outbox`, or `CODEX_DISCORD_OUTBOX_DIR`)
 
 The `image_gen` output directory is always allowed so generated images can be
 attached. Codex's built-in `image_gen` shows an inline preview but often writes
@@ -267,6 +278,8 @@ $env:CODEX_DISCORD_ATTACHMENT_ROOTS="C:\path\to\repo;C:\path\to\exports"
 | `CODEX_SKIP_GIT_REPO_CHECK` | `true` | Pass `--skip-git-repo-check` to `codex exec` |
 | `CODEX_DISCORD_ATTACHMENT_ROOTS` | cwd, workdir, inbox | Allowed outbound file roots |
 | `CODEX_DISCORD_GENERATED_IMAGES_DIR` | `~/.codex/generated_images` | Codex `image_gen` output dir surfaced by `latest_generated_images` and always allowed for attachments |
+| `CODEX_DISCORD_RELAY_ATTACHMENTS` | `true` | `bot` mode: auto-attach images and outbox files produced by each run |
+| `CODEX_DISCORD_OUTBOX_DIR` | `~/.codex/discord_outbox` | Base directory Codex is told to save relay deliverables under (one subdirectory per channel) |
 | `CODEX_DISCORD_ASSUME_YES` | `false` | Suppress writable unattended bot warning |
 
 ## Troubleshooting

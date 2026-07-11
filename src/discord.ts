@@ -18,6 +18,11 @@ import {
   type Attachment,
   type Message,
 } from 'discord.js'
+import {
+  defaultOutboxDir,
+  DISCORD_MAX_FILE_BYTES,
+  DISCORD_MAX_FILES_PER_MESSAGE,
+} from './attachments.js'
 import { sanitizeOneLine, splitDiscordText } from './chunk.js'
 import { generatedImagesDir } from './images.js'
 import {
@@ -28,7 +33,7 @@ import {
 } from './state.js'
 import type { Access, AttachmentMeta, QueuedMessage, StatePaths } from './types.js'
 
-const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+const MAX_ATTACHMENT_BYTES = DISCORD_MAX_FILE_BYTES
 const RECENT_SENT_CAP = 200
 const MENTION_PATTERN_MAX_LENGTH = 128
 const MENTION_PATTERN_TEXT_LIMIT = 512
@@ -101,7 +106,9 @@ export class DiscordBridge extends EventEmitter {
     const chunks = splitDiscordText(params.text, limit, access.chunkMode ?? 'newline')
     const files = params.files ?? []
 
-    if (files.length > 10) throw new Error('Discord allows at most 10 files per message')
+    if (files.length > DISCORD_MAX_FILES_PER_MESSAGE) {
+      throw new Error(`Discord allows at most ${DISCORD_MAX_FILES_PER_MESSAGE} files per message`)
+    }
     for (const file of files) {
       this.assertSendable(file)
       const stat = statSync(file)
@@ -486,8 +493,9 @@ function safeExtension(name: string): string {
 }
 
 // Candidate attachment roots before symlink resolution. Codex's image_gen
-// output directory is always appended so generated images stay attachable
-// regardless of CODEX_DISCORD_ATTACHMENT_ROOTS.
+// output directory and the relay outbox are always appended so generated
+// images and relay deliverables stay attachable regardless of
+// CODEX_DISCORD_ATTACHMENT_ROOTS.
 export function attachmentRootCandidates(
   inboxDir: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -497,7 +505,7 @@ export function attachmentRootCandidates(
     ? [...configured.split(delimiter), inboxDir]
     : [process.cwd(), env.CODEX_WORKDIR, inboxDir]
 
-  return [...base, generatedImagesDir(env)].filter(
+  return [...base, generatedImagesDir(env), defaultOutboxDir(env)].filter(
     (root): root is string => Boolean(root?.trim()),
   )
 }

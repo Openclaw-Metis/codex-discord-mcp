@@ -337,6 +337,14 @@ export function collectDoctorReport(): DoctorReport {
       ok: true,
       value: codexOptions.approvalPolicy,
     },
+    relayAttachments: {
+      ok: true,
+      value: codexOptions.relayAttachments ? 'on' : 'off',
+    },
+    outbox: {
+      ok: true,
+      path: codexOptions.outboxDir,
+    },
   }
 
   return {
@@ -376,14 +384,14 @@ function printHelp(): void {
   process.stdout.write(`codex-discord-mcp
 
 Commands:
-  mcp                       Run the Discord MCP server over stdio
-  bot                       Run Discord -> codex exec relay mode
-  init                       Interactive first-run setup
-  configure [token]          Store DISCORD_BOT_TOKEN in the state .env file
-  access <command>           Manage local allowlist and pairing
-  invite-url <client-id>     Print a Discord bot invite URL
-  print-config [--npx]       Print a Codex config.toml MCP snippet
-  doctor [--json]            Show basic local configuration status
+  mcp                     Run the Discord MCP server over stdio
+  bot                     Run Discord -> codex exec relay mode
+  init                    Interactive first-run setup
+  configure [token]       Store DISCORD_BOT_TOKEN in the state .env file
+  access <command>        Manage local allowlist and pairing
+  invite-url <client-id>  Print a Discord bot invite URL
+  print-config [--npx]    Print a Codex config.toml MCP snippet
+  doctor [--json]         Show basic local configuration status
 
 Run "codex-discord-mcp access help" for access commands.
 `)
