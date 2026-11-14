@@ -342,9 +342,12 @@ npm run dev:bot
 
 ## Release
 
-The package is prepared for npm publishing with:
+GitHub Releases publish to npm through `.github/workflows/release.yml`.
 
-- `bin` entry: `codex-discord-mcp`
-- `files` whitelist for published package contents
-- `prepublishOnly` validation: typecheck, tests, build
-- Linux and Windows GitHub Actions CI
+1. Make sure npm trusted publishing is configured for `Openclaw-Metis/codex-discord-mcp` and the `release.yml` workflow.
+2. Bump `package.json` and `package-lock.json` to the release version and commit the change.
+3. Create a GitHub Release whose tag is `v` plus the package version, for example `v0.3.0`.
+
+The release workflow checks that the tag matches `package.json`, runs typecheck, tests, and build, then publishes to npm with provenance. Normal releases use the npm `latest` dist-tag; GitHub pre-releases use `next`.
+
+The package itself ships the `codex-discord-mcp` bin, a `files` whitelist, and a `prepublishOnly` gate (typecheck, tests, build).

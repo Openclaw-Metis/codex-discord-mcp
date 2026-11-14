@@ -25,6 +25,10 @@
     "type": "git",
     "url": "git+https://github.com/Openclaw-Metis/codex-discord-mcp.git"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "bugs": {
     "url": "https://github.com/Openclaw-Metis/codex-discord-mcp/issues"
   },

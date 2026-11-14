@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify release tag
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${package_version}"
+
+          if [ "${{ github.event.release.tag_name }}" != "$expected_tag" ]; then
+            echo "::error::Release tag must be ${expected_tag} to publish package version ${package_version}."
+            exit 1
+          fi
+
+      - name: Select npm dist-tag
+        id: dist_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --provenance --tag "${{ steps.dist_tag.outputs.npm_tag }}"
