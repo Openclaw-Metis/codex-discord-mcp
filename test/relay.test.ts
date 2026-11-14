@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunOptions } from '../src/codex.js'
 import { RelayController, type RelayBridge, type RelayRunner } from '../src/relay.js'
 import { appendQueuedMessage, getStatePaths, readQueue } from '../src/state.js'
@@ -115,8 +115,12 @@ describe('RelayController', () => {
       { now: () => clock, log: () => {} },
     )
   })
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true })
+  afterEach(async () => {
+    // Settle in-flight runs and control replies before deleting their state
+    // dir; Windows refuses to remove a directory with a write in progress.
+    await relay.shutdown(1000)
+    await relay.whenIdle('chan')
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
   it('runs a message, replies with text and files, and marks it handled', async () => {
@@ -155,9 +159,7 @@ describe('RelayController', () => {
     expect(bridge.reactions).toEqual(['m2:⏳'])
 
     runner.pending[0].resolve({ text: 'one', filePaths: [] })
-    await tick()
-    await tick()
-    expect(runner.calls).toHaveLength(2)
+    await vi.waitFor(() => expect(runner.calls).toHaveLength(2))
     expect(bridge.unreactions).toEqual(['m2:⏳'])
 
     runner.pending[1].resolve({ text: 'two', filePaths: [] })
@@ -176,7 +178,7 @@ describe('RelayController', () => {
     expect(reply).toContain('Running for 3m 12s: "build the report"')
     expect(reply).toContain('Queued: 1')
     expect(reply).toContain('thread-123')
-    expect(status('s1')).toBe('handled')
+    await vi.waitFor(() => expect(status('s1')).toBe('handled'))
   })
 
   it('!stop cancels the run, drops the queue, and does not report a failure', async () => {
@@ -198,7 +200,7 @@ describe('RelayController', () => {
 
   it('!stop with nothing running says so', async () => {
     await deliver(message('x', '!stop'))
-    expect(bridge.sent[0].text).toBe('Nothing is running.')
+    await vi.waitFor(() => expect(bridge.sent[0]?.text).toBe('Nothing is running.'))
   })
 
   it('!new forgets the thread now and again after an in-flight run finishes', async () => {
@@ -206,7 +208,7 @@ describe('RelayController', () => {
     await deliver(message('m1'))
     await deliver(message('n', '!new'))
     expect(runner.forgets).toEqual(['chan'])
-    expect(bridge.sent[0].text).toContain('current task will finish')
+    await vi.waitFor(() => expect(bridge.sent[0]?.text).toContain('current task will finish'))
 
     runner.pending[0].resolve({ text: 'done', filePaths: [] })
     await relay.whenIdle('chan')
@@ -223,13 +225,14 @@ describe('RelayController', () => {
     )
     await deliver(message('n', '!new'))
     expect(runner.forgets).toEqual([])
-    expect(bridge.sent[0].text).toContain('resume is off')
+    await vi.waitFor(() => expect(bridge.sent[0]?.text).toContain('resume is off'))
   })
 
   it('passes downloaded attachments to the runner', async () => {
     bridge.downloads = [{ id: 'a1', name: 'pic.png', path: '/inbox/a1.png' }]
     const attachments = [{ id: 'a1', name: 'pic.png', size: 10, contentType: 'image/png' }]
     await deliver(message('m1', 'look', { attachments }))
+    await vi.waitFor(() => expect(runner.calls).toHaveLength(1))
     expect(runner.calls[0].options?.attachments).toEqual(bridge.downloads)
   })
 
@@ -237,6 +240,7 @@ describe('RelayController', () => {
     bridge.downloads = new Error('missing access')
     const attachments = [{ id: 'a1', name: 'pic.png', size: 10 }]
     await deliver(message('m1', 'look', { attachments }))
+    await vi.waitFor(() => expect(runner.calls).toHaveLength(1))
     expect(runner.calls[0].options?.attachments).toEqual([
       { id: 'a1', name: 'pic.png', error: 'missing access' },
     ])
@@ -252,6 +256,7 @@ describe('RelayController', () => {
     )
     bridge.downloads = new Error('should not be called')
     await deliver(message('m1', 'look', { attachments: [{ id: 'a1', name: 'p', size: 1 }] }))
+    await vi.waitFor(() => expect(runner.calls).toHaveLength(1))
     expect(runner.calls[0].options?.attachments).toEqual([])
   })
 
@@ -264,7 +269,7 @@ describe('RelayController', () => {
     for (const item of [old, fresh, cmd]) await appendQueuedMessage(item, paths)
 
     await relay.replayPending([old, fresh, cmd])
-    await tick()
+    await vi.waitFor(() => expect(runner.calls).toHaveLength(1))
     expect(runner.calls.map(call => call.message.id)).toEqual(['fresh'])
     expect(status('old')).toBe('handled')
     expect(status('cmd')).toBe('handled')
