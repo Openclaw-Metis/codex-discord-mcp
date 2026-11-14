@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto'
 import {
   ChannelType,
   Client,
+  Events,
   GatewayIntentBits,
   Partials,
   type Attachment,
@@ -27,11 +28,18 @@ import { sanitizeOneLine, splitDiscordText } from './chunk.js'
 import { generatedImagesDir } from './images.js'
 import {
   appendQueuedMessage,
+  liveLockOwner,
   loadAccess,
   pruneExpiredPending,
   saveAccess,
 } from './state.js'
-import type { Access, AttachmentMeta, QueuedMessage, StatePaths } from './types.js'
+import type {
+  Access,
+  AttachmentMeta,
+  LocalAttachment,
+  QueuedMessage,
+  StatePaths,
+} from './types.js'
 
 const MAX_ATTACHMENT_BYTES = DISCORD_MAX_FILE_BYTES
 const RECENT_SENT_CAP = 200
@@ -41,6 +49,14 @@ const APPROVAL_CONFIRM_MAX_ATTEMPTS = 5
 
 export type DiscordBridgeEvents = {
   message: [QueuedMessage]
+}
+
+export type DiscordBridgeOptions = {
+  // MCP mode sets this: while a relay (bot mode) process holds the bot lock it
+  // already owns inbound handling, so this bridge only serves outbound tools
+  // instead of duplicating typing, ack reactions, pairing replies, pairing
+  // confirmations, and racing the relay's queue.json writes.
+  yieldInboundToRelay?: boolean
 }
 
 export class DiscordBridge extends EventEmitter {
@@ -55,6 +71,7 @@ export class DiscordBridge extends EventEmitter {
   constructor(
     private readonly token: string,
     private readonly paths: StatePaths,
+    private readonly options: DiscordBridgeOptions = {},
   ) {
     super()
     this.client = new Client({
@@ -67,20 +84,21 @@ export class DiscordBridge extends EventEmitter {
       partials: [Partials.Channel],
     })
 
-    this.client.on('messageCreate', message => {
+    this.client.on(Events.MessageCreate, message => {
       if (message.author.bot) return
+      if (this.relayOwner() !== undefined) return
       this.handleInbound(message).catch(err => {
         process.stderr.write(`discord bridge: inbound handling failed: ${err}\n`)
       })
     })
 
-    this.client.on('error', err => {
+    this.client.on(Events.Error, err => {
       process.stderr.write(`discord bridge: client error: ${err}\n`)
     })
   }
 
   async start(): Promise<void> {
-    this.client.once('ready', client => {
+    this.client.once(Events.ClientReady, client => {
       process.stderr.write(`discord bridge: connected as ${client.user.tag}\n`)
     })
     this.approvalTimer = setInterval(() => this.checkApprovals(), 5000)
@@ -143,6 +161,21 @@ export class DiscordBridge extends EventEmitter {
     await message.react(emoji)
   }
 
+  // Remove the bot's own reaction. Missing reaction/message is not an error.
+  async unreact(chatId: string, messageId: string, emoji: string): Promise<void> {
+    const me = this.client.user?.id
+    if (!me) return
+    const channel = await this.fetchAllowedChannel(chatId)
+    const message = await channel.messages.fetch(messageId)
+    await message.reactions.resolve(emoji)?.users.remove(me)
+  }
+
+  // pid of the relay process this bridge yields inbound handling to, if any.
+  relayOwner(): number | undefined {
+    if (!this.options.yieldInboundToRelay) return undefined
+    return liveLockOwner(this.paths.botPidFile)
+  }
+
   async editMessage(chatId: string, messageId: string, text: string): Promise<string> {
     const channel = await this.fetchAllowedChannel(chatId)
     const message = await channel.messages.fetch(messageId)
@@ -169,16 +202,27 @@ export class DiscordBridge extends EventEmitter {
       .join('\n')
   }
 
-  async downloadAttachments(chatId: string, messageId: string): Promise<string[]> {
+  // Download every attachment of a message into the inbox. Each attachment
+  // succeeds or fails on its own, so one oversized file does not hide the rest.
+  async downloadAttachmentFiles(chatId: string, messageId: string): Promise<LocalAttachment[]> {
     const channel = await this.fetchAllowedChannel(chatId)
     const message = await channel.messages.fetch(messageId)
-    const paths: string[] = []
+    const results: LocalAttachment[] = []
 
-    for (const attachment of message.attachments.values()) {
-      paths.push(await this.downloadAttachment(attachment))
+    for (const attachment of message.attachments.values() as Iterable<Attachment>) {
+      const name = safeAttachmentName(attachment)
+      try {
+        results.push({ id: attachment.id, name, path: await this.downloadAttachment(attachment) })
+      } catch (err) {
+        results.push({
+          id: attachment.id,
+          name,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
 
-    return paths
+    return results
   }
 
   async sendTyping(chatId: string): Promise<void> {
@@ -375,6 +419,7 @@ export class DiscordBridge extends EventEmitter {
 
   private checkApprovals(): void {
     if (!this.client.isReady()) return
+    if (this.relayOwner() !== undefined) return
 
     let files: string[]
     try {

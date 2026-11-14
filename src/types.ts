@@ -36,6 +36,15 @@ export type AttachmentMeta = {
   url?: string
 }
 
+// An inbound attachment the relay downloaded (or failed to download) before a
+// run, so the runner can hand the model a local path instead of a CDN URL.
+export type LocalAttachment = {
+  id: string
+  name: string
+  path?: string
+  error?: string
+}
+
 export type QueuedMessage = {
   id: string
   chatId: string

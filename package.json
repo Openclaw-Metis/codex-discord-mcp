@@ -1,6 +1,6 @@
 {
   "name": "codex-discord-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Discord bot bridge and MCP tools for Codex CLI.",
   "type": "module",
   "files": [
@@ -38,9 +38,9 @@
     "discord-bot"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.22.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "cross-spawn": "^7.0.6",
-    "discord.js": "^14.18.0"
+    "discord.js": "^14.28.1"
   },
   "devDependencies": {
     "@emnapi/core": "^1.11.1",

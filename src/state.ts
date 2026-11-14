@@ -2,10 +2,12 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
   promises as fsPromises,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -169,15 +171,33 @@ export type PendingEntryApproval = {
   username?: string
 }
 
+// Queue updates are read-modify-write. Serialize them per file within this
+// process, or two concurrent updates (an inbound append while another channel
+// marks its message handled) can silently drop one of the writes.
+const fileLocks = new Map<string, Promise<unknown>>()
+
+function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  const previous = fileLocks.get(path) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const tail = run.catch(() => {})
+  fileLocks.set(path, tail)
+  void tail.then(() => {
+    if (fileLocks.get(path) === tail) fileLocks.delete(path)
+  })
+  return run
+}
+
 export async function appendQueuedMessage(
   message: QueuedMessage,
   paths = getStatePaths(),
 ): Promise<void> {
-  const queue = readQueue(paths)
-  if (!queue.some(item => item.id === message.id)) {
-    queue.push(message)
-    await writeJsonAtomic(paths.queueFile, queue.slice(-500))
-  }
+  await withFileLock(paths.queueFile, async () => {
+    const queue = readQueue(paths)
+    if (!queue.some(item => item.id === message.id)) {
+      queue.push(message)
+      await writeJsonAtomic(paths.queueFile, queue.slice(-500))
+    }
+  })
 }
 
 export function readQueue(paths = getStatePaths()): QueuedMessage[] {
@@ -191,17 +211,53 @@ export function listPendingMessages(limit = 20, paths = getStatePaths()): Queued
 }
 
 export async function markMessageHandled(id: string, paths = getStatePaths()): Promise<boolean> {
-  const queue = readQueue(paths)
-  let changed = false
-  for (const item of queue) {
-    if (item.id === id) {
-      item.status = 'handled'
-      changed = true
-      break
+  return (await markMessagesHandled([id], paths)) > 0
+}
+
+// Mark several queued messages handled with a single queue rewrite. Returns
+// how many entries changed status.
+export async function markMessagesHandled(
+  ids: string[],
+  paths = getStatePaths(),
+): Promise<number> {
+  if (ids.length === 0) return 0
+  const wanted = new Set(ids)
+  return await withFileLock(paths.queueFile, async () => {
+    const queue = readQueue(paths)
+    let changed = 0
+    for (const item of queue) {
+      if (wanted.has(item.id) && item.status !== 'handled') {
+        item.status = 'handled'
+        changed += 1
+      }
+    }
+    if (changed > 0) await writeJsonAtomic(paths.queueFile, queue)
+    return changed
+  })
+}
+
+// Remove regular files in `dir` (non-recursive) older than maxAgeMs. Used to
+// keep the attachment inbox from growing without bound. Returns the count.
+export function pruneOldFiles(dir: string, maxAgeMs: number, now = Date.now()): number {
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const name of names) {
+    const path = join(dir, name)
+    try {
+      const stat = statSync(path)
+      if (!stat.isFile() || now - stat.mtimeMs <= maxAgeMs) continue
+      rmSync(path, { force: true })
+      removed += 1
+    } catch {
+      // vanished or unreadable; skip
     }
   }
-  if (changed) await writeJsonAtomic(paths.queueFile, queue)
-  return changed
+  return removed
 }
 
 export function loadThreads(paths = getStatePaths()): ThreadMap {
@@ -213,15 +269,20 @@ export async function saveThread(
   threadId: string,
   paths = getStatePaths(),
 ): Promise<void> {
-  const threads = loadThreads(paths)
-  threads[chatId] = threadId
-  await writeJsonAtomic(paths.threadsFile, threads)
+  await withFileLock(paths.threadsFile, async () => {
+    const threads = loadThreads(paths)
+    threads[chatId] = threadId
+    await writeJsonAtomic(paths.threadsFile, threads)
+  })
 }
 
 export async function removeThread(chatId: string, paths = getStatePaths()): Promise<void> {
-  const threads = loadThreads(paths)
-  delete threads[chatId]
-  await writeJsonAtomic(paths.threadsFile, threads)
+  await withFileLock(paths.threadsFile, async () => {
+    const threads = loadThreads(paths)
+    if (!(chatId in threads)) return
+    delete threads[chatId]
+    await writeJsonAtomic(paths.threadsFile, threads)
+  })
 }
 
 export function clearStateFile(path: string): void {
@@ -259,6 +320,14 @@ export function acquireProcessLock(
   }
 
   throw new Error(`${label} lock could not be acquired at ${path}`)
+}
+
+// The pid of a live process (other than `selfPid`) holding the lock file, if
+// any. MCP mode uses this to tell whether a relay is serving the same bot.
+export function liveLockOwner(path: string, selfPid = process.pid): number | undefined {
+  const owner = readPidFile(path)
+  if (!owner || owner === selfPid) return undefined
+  return isProcessAlive(owner) ? owner : undefined
 }
 
 function readJson<T>(path: string, fallback: T): T
