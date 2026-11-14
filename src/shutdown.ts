@@ -18,4 +18,6 @@ export function installShutdownHandlers(options: {
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+  // tmux kill-pane / respawn-pane -k and closed terminals deliver SIGHUP.
+  process.on('SIGHUP', shutdown)
 }

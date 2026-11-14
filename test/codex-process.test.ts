@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildDiscordPrompt, runCodexProcess } from '../src/codex.js'
+import { descendantPids, readProcessTable } from '../src/process-tree.js'
 import type { QueuedMessage } from '../src/types.js'
 
 const node = process.execPath
@@ -87,5 +88,63 @@ describe('buildDiscordPrompt attachments', () => {
     expect(prompt).toContain('- pic.png (image/png, 2KB, id: a1)\n')
     expect(prompt).not.toContain('saved locally')
     expect(prompt).not.toContain('read them from the local paths')
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('runCodexProcess process tree', () => {
+  it('kills tool subprocesses the CLI started, not just the CLI', async () => {
+    // The fake CLI starts a long-lived grandchild in its own session (as agents
+    // run tool commands) that shares its stdout, the
+    // way a shell tool call would, then reports the grandchild pid on stderr.
+    const script = [
+      "const { spawn } = require('node:child_process')",
+      "const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'inherit', detached: true })",
+      "process.stderr.write('GRANDCHILD=' + g.pid + '\\n')",
+      'setTimeout(() => {}, 60000)',
+    ].join(';')
+    const controller = new AbortController()
+    const run = runCodexProcess(node, ['-e', script], { ...opts, signal: controller.signal })
+    let grandchild = 0
+    const original = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      const match = /GRANDCHILD=(\d+)/.exec(String(chunk))
+      if (match) grandchild = Number(match[1])
+      return (original as (...args: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof process.stderr.write
+    try {
+      await vi.waitFor(() => expect(grandchild).toBeGreaterThan(0), { timeout: 5_000 })
+      controller.abort('stop')
+      await expect(run).rejects.toThrow(/cancelled/)
+      await vi.waitFor(
+        () => expect(() => process.kill(grandchild, 0)).toThrow(),
+        { timeout: 5_000 },
+      )
+    } finally {
+      process.stderr.write = original
+      try {
+        process.kill(grandchild, 'SIGKILL')
+      } catch {}
+    }
+  })
+})
+
+describe('descendantPids', () => {
+  it('walks the whole tree from the given roots', () => {
+    const table = new Map([
+      [10, 1],
+      [11, 10],
+      [12, 11],
+      [13, 10],
+      [20, 1],
+      [21, 20],
+    ])
+    expect(descendantPids([10], table).sort()).toEqual([11, 12, 13])
+    expect(descendantPids([11, 20], table).sort()).toEqual([12, 21])
+    expect(descendantPids([99], table)).toEqual([])
+  })
+
+  it.skipIf(process.platform === 'win32')('sees real child processes', () => {
+    const table = readProcessTable()
+    expect(table.get(process.pid)).toBeGreaterThan(0)
   })
 })

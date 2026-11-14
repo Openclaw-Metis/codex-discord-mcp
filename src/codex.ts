@@ -7,6 +7,7 @@ import {
   defaultOutboxDir,
 } from './attachments.js'
 import { optional, parseBoolean, parsePositiveInt } from './env.js'
+import { signalProcessGroup, terminateProcessTree, USE_PROCESS_GROUP } from './process-tree.js'
 import { loadThreads, removeThread, saveThread } from './state.js'
 import type { LocalAttachment, QueuedMessage, StatePaths } from './types.js'
 
@@ -240,6 +241,7 @@ export async function runCodexProcess(
       cwd: options.cwd,
       env: buildCodexChildEnv(),
       windowsHide: true,
+      detached: USE_PROCESS_GROUP,
       // Close stdin. The prompt is passed as a positional arg, and `codex exec`
       // otherwise blocks reading stdin for an appended `<stdin>` block until EOF.
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -254,14 +256,13 @@ export async function runCodexProcess(
     let killTimer: NodeJS.Timeout | undefined
 
     // A codex run that ignores SIGTERM would keep burning tokens forever.
+    // The SIGKILL timer deliberately survives the leader's exit: its tool
+    // subprocesses may ignore SIGTERM.
+    let terminated = false
     const terminate = (): void => {
-      child.kill('SIGTERM')
-      killTimer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL')
-        } catch {}
-      }, KILL_GRACE_MS)
-      killTimer.unref()
+      terminated = true
+      // Also reaches tool commands the CLI started in their own sessions.
+      killTimer = terminateProcessTree(child, KILL_GRACE_MS)
     }
 
     const finish = (): void => {
@@ -288,7 +289,7 @@ export async function runCodexProcess(
 
     if (!child.stdout || !child.stderr) {
       finish()
-      child.kill('SIGTERM')
+      signalProcessGroup(child, 'SIGTERM')
       reject(new Error('codex process did not provide stdout/stderr pipes'))
       return
     }
@@ -322,7 +323,7 @@ export async function runCodexProcess(
     })
 
     child.on('close', (code, exitSignal) => {
-      if (killTimer) clearTimeout(killTimer)
+      if (killTimer && !terminated) clearTimeout(killTimer)
       if (settled) return
       finish()
       parseJsonLine(lineBuffer.trim())
