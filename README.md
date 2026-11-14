@@ -166,6 +166,27 @@ For unattended relay mode, keep `CODEX_APPROVAL_POLICY=never` and use the least 
 
 Attachments respect Discord limits: at most 10 files per reply, 25MB each. If attaching fails, the relay retries text-only so the answer itself is never lost.
 
+Files the user attaches to a Discord message are downloaded into the bridge inbox before the run (`CODEX_DISCORD_RELAY_DOWNLOAD_ATTACHMENTS=false` disables this), and the prompt lists each one's local path so Codex can read it directly. Inbox files older than 7 days are pruned.
+
+### Relay Commands
+
+Send one of these as the whole message (in mention-gated channels, `@bot !status` works too). They are answered immediately, even while a long run is busy:
+
+| Command | Effect |
+| --- | --- |
+| `!status` | What is running, for how long, how many messages are queued, and which thread the channel resumes |
+| `!stop` | Cancel the running Codex task (SIGTERM, then SIGKILL) and drop queued messages |
+| `!new` | Forget the channel's resumed thread so the next message starts a fresh conversation (`CODEX_RESUME_BY_CHANNEL=true`) |
+| `!help` | List the commands |
+
+`/status`, `/stop`, `/new`, `/help`, and the aliases `!cancel` / `!reset` work the same way. Runs in one channel are serial; a message that arrives while a run is busy gets a ⏳ reaction until its turn starts.
+
+### Restarts
+
+On shutdown the relay cancels in-flight runs instead of orphaning them, and leaves those messages pending. On the next start, pending messages received within `CODEX_DISCORD_REPLAY_MAX_AGE_MS` (default one hour) are replayed; older ones are marked handled and skipped, so a crash never re-runs a stale request hours later.
+
+While a relay is running, `mcp` mode servers sharing the same state directory (the interactive Codex, or the one Codex starts inside each relay run) leave inbound handling to the relay: they keep serving outbound tools but stop duplicating typing indicators, ack reactions, pairing replies, and queue writes.
+
 ## Mode 2: Codex MCP Tools
 
 Print a local config snippet:
@@ -280,6 +301,8 @@ $env:CODEX_DISCORD_ATTACHMENT_ROOTS="C:\path\to\repo;C:\path\to\exports"
 | `CODEX_DISCORD_GENERATED_IMAGES_DIR` | `~/.codex/generated_images` | Codex `image_gen` output dir surfaced by `latest_generated_images` and always allowed for attachments |
 | `CODEX_DISCORD_RELAY_ATTACHMENTS` | `true` | `bot` mode: auto-attach images and outbox files produced by each run |
 | `CODEX_DISCORD_OUTBOX_DIR` | `~/.codex/discord_outbox` | Base directory Codex is told to save relay deliverables under (one subdirectory per channel) |
+| `CODEX_DISCORD_RELAY_DOWNLOAD_ATTACHMENTS` | `true` | `bot` mode: download inbound attachments into the inbox and give Codex their local paths |
+| `CODEX_DISCORD_REPLAY_MAX_AGE_MS` | `3600000` | `bot` mode: replay pending messages younger than this after a restart; `0` disables replay |
 | `CODEX_DISCORD_ASSUME_YES` | `false` | Suppress writable unattended bot warning |
 
 ## Troubleshooting

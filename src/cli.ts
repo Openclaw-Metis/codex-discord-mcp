@@ -10,13 +10,14 @@ import {
   defaultAccess,
   ensureStateDir,
   getStatePaths,
+  liveLockOwner,
   loadAccess,
   loadStateEnv,
   saveAccess,
   writeToken,
 } from './state.js'
 import { runMcpServer } from './mcp.js'
-import { runRelay } from './relay.js'
+import { relayOptionsFromEnv, runRelay } from './relay.js'
 import type { DmPolicy } from './types.js'
 
 const DISCORD_BOT_PERMISSIONS = '274878008384'
@@ -302,6 +303,8 @@ export function collectDoctorReport(): DoctorReport {
   const paths = getStatePaths()
   loadStateEnv(paths)
   const codexOptions = codexOptionsFromEnv()
+  const relayOptions = relayOptionsFromEnv(codexOptions.resumeByChannel)
+  const relayPid = liveLockOwner(paths.botPidFile)
   const checks: Record<string, DoctorCheck> = {
     node: checkNodeVersion(),
     codex: checkCodexCommand(codexOptions.command),
@@ -344,6 +347,18 @@ export function collectDoctorReport(): DoctorReport {
     outbox: {
       ok: true,
       path: codexOptions.outboxDir,
+    },
+    relayDownloadAttachments: {
+      ok: true,
+      value: relayOptions.downloadAttachments ? 'on' : 'off',
+    },
+    replayMaxAge: {
+      ok: true,
+      value: relayOptions.replayMaxAgeMs > 0 ? `${relayOptions.replayMaxAgeMs}ms` : 'off',
+    },
+    relay: {
+      ok: true,
+      value: relayPid ? `running (pid ${relayPid})` : 'not running',
     },
   }
 
